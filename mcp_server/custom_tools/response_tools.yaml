@@ -1,0 +1,425 @@
+# =============================================================================
+# SENTINEL: Autonomous Agentic SOC Commander
+# response_tools.yaml — Response tool runtime configuration
+#
+# Response tools execute real containment and remediation actions against
+# live infrastructure. Every tool in this file MUST go through the
+# pre-execution safety gate before any API call is made:
+#
+#   1. Distributed lock check (response_locks KV Store)
+#   2. Duplicate action suppression (dedup window)
+#   3. Dry-run validation (if dry_run=true)
+#   4. Audit log pre-write (sentinel_audit index)
+#   5. Agent identity verification (executor only)
+#
+# Rollback timers are enforced by the orchestrator's rollback_scheduler.py
+# sweep, which runs every 5 minutes and checks the response_locks collection.
+# =============================================================================
+
+---
+tool_group: response
+description: Containment and remediation tools available exclusively to the Executor agent
+version: "1.0.0"
+authorized_agents:
+  - executor
+
+safety_gate:
+  enabled: true
+  require_case_id: true
+  require_justification: true
+  min_justification_length: 20
+  dedup_window_seconds: 300
+  dedup_key_fields: [action_type, target, case_id]
+  pre_audit_write: true
+  audit_index: sentinel_audit
+  audit_sourcetype: sentinel:audit
+
+defaults:
+  retry:
+    max_attempts: 2
+    backoff_strategy: fixed
+    backoff_base_seconds: 3.0
+    retry_on_status: [500, 502, 503, 504]
+    do_not_retry_on_status: [400, 401, 403, 404, 409]
+  timeout_seconds: 30
+  rollback_after_hours: 4
+  log_level: INFO
+
+tools:
+
+  # ---------------------------------------------------------------------------
+  # execute_response_action
+  # Master dispatcher that routes to platform-specific sub-handlers based
+  # on action_type and platform. All sub-handlers share the safety gate.
+  # ---------------------------------------------------------------------------
+  - name: execute_response_action
+    handler: handlers.response.ResponseActionDispatcher
+    authorized_agents: [executor]
+
+    rate_limit:
+      rps: 2
+      burst: 4
+      strategy: token_bucket
+      exceeded_action: reject
+      reject_message: "Response action rate limit exceeded. Actions are intentionally throttled."
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 25
+      total_seconds: 30
+
+    action_handlers:
+      # --- Host Isolation ---
+      isolate_host:
+        platforms:
+          crowdstrike:
+            endpoint: /devices/entities/devices-actions/v2
+            method: POST
+            payload_template:
+              action_name: contain
+              ids: ["{target_device_id}"]
+            resolve_target: true
+            resolve_via: crowdstrike_device_lookup
+          defender:
+            endpoint: /v1.0/deviceManagement/managedDevices/{device_id}/isolate
+            method: POST
+            resolve_target: true
+            resolve_via: defender_device_lookup
+          sentinelone:
+            endpoint: /web/api/v2.1/agents/actions/disconnect
+            method: POST
+            payload_template:
+              filter:
+                computerName: "{target}"
+        rollback_action: unisolate_host
+        rollback_timer_default_hours: 4
+
+      unisolate_host:
+        platforms:
+          crowdstrike:
+            endpoint: /devices/entities/devices-actions/v2
+            method: POST
+            payload_template:
+              action_name: lift_containment
+              ids: ["{target_device_id}"]
+        requires_approval: true
+        approval_roles: [sentinel_admin, soc_lead]
+
+      # --- User Account Actions ---
+      disable_user:
+        platforms:
+          azuread:
+            endpoint: /v1.0/users/{user_upn}
+            method: PATCH
+            payload_template:
+              accountEnabled: false
+          okta:
+            endpoint: /api/v1/users/{user_id}/lifecycle/deactivate
+            method: POST
+          active_directory:
+            method: ldap_modify
+            attribute: userAccountControl
+            value: 514
+        rollback_action: enable_user
+        rollback_timer_default_hours: 24
+        requires_manager_approval_after_hours: 4
+
+      enable_user:
+        platforms:
+          azuread:
+            endpoint: /v1.0/users/{user_upn}
+            method: PATCH
+            payload_template:
+              accountEnabled: true
+          okta:
+            endpoint: /api/v1/users/{user_id}/lifecycle/activate
+            method: POST
+        requires_approval: true
+        approval_roles: [sentinel_admin, hr_security]
+
+      revoke_session:
+        platforms:
+          azuread:
+            endpoint: /v1.0/users/{user_upn}/revokeSignInSessions
+            method: POST
+          okta:
+            endpoint: /api/v1/users/{user_id}/sessions
+            method: DELETE
+        rollback_action: null
+        is_reversible: false
+
+      rotate_credentials:
+        platforms:
+          azuread:
+            endpoint: /v1.0/users/{user_upn}/authentication/methods
+            method: POST
+          aws:
+            endpoint: iam:UpdateAccessKey
+            method: api_call
+        rollback_action: null
+        is_reversible: false
+        requires_approval: true
+
+      # --- Network Containment ---
+      block_ip:
+        platforms:
+          panos:
+            endpoint: /restapi/v10.1/Objects/DynamicBlockLists
+            method: POST
+            or_use_dag: true
+            dag_name: SENTINEL_BLOCKLIST
+          cisco_fmc:
+            endpoint: /api/fmc_config/v1/domain/{domain_uuid}/object/networkaddresses
+            method: POST
+            then_add_to_access_rule: SENTINEL_BLOCK_RULE
+          aws:
+            endpoint: ec2:AuthorizeSecurityGroupIngress
+            method: api_call
+            action: deny
+        rollback_action: unblock_ip
+        rollback_timer_default_hours: 72
+        permanent_threshold_score: 95
+
+      unblock_ip:
+        platforms:
+          panos:
+            method: remove_from_dag
+            dag_name: SENTINEL_BLOCKLIST
+          cisco_fmc:
+            method: remove_from_access_rule
+        requires_approval: false
+
+      # --- File and Process Actions ---
+      quarantine_file:
+        platforms:
+          crowdstrike:
+            endpoint: /real-time-response/entities/quarantine/v1
+            method: POST
+          defender:
+            endpoint: /v1.0/deviceManagement/managedDevices/{device_id}/runRemediationScript
+            method: POST
+          sentinelone:
+            endpoint: /web/api/v2.1/threats/actions/quarantine-files
+            method: POST
+        rollback_action: restore_file
+        rollback_timer_default_hours: 48
+
+      restore_file:
+        platforms:
+          crowdstrike:
+            endpoint: /real-time-response/entities/quarantine/v1
+            method: DELETE
+        requires_approval: true
+        approval_roles: [sentinel_admin, incident_commander]
+
+      kill_process:
+        platforms:
+          crowdstrike:
+            method: rtr_kill_process
+            endpoint: /real-time-response/entities/processes/v1
+          sentinelone:
+            endpoint: /web/api/v2.1/agents/actions/kill-process
+            method: POST
+        rollback_action: null
+        is_reversible: false
+
+      # --- Cloud Remediation ---
+      remediate_s3_policy:
+        platforms:
+          aws:
+            endpoint: s3:PutBucketPolicy
+            method: api_call
+            policy_template: private_block_public_access
+        rollback_action: null
+        is_reversible: true
+        rollback_requires_policy_backup: true
+
+    verification:
+      enabled: true
+      delay_seconds: 5
+      verification_queries:
+        isolate_host:
+          spl: "index=network src={target} earliest=-2m | stats count | where count=0"
+          expected: "no_results"
+          timeout_seconds: 30
+        disable_user:
+          spl: "index=identity user={target} action=success earliest=-2m | stats count | where count=0"
+          expected: "no_results"
+          timeout_seconds: 30
+        block_ip:
+          spl: "index=network (src={target} OR dest={target}) action=blocked earliest=-2m | stats count | where count>0"
+          expected: "has_results"
+          timeout_seconds: 30
+
+    rollback:
+      scheduler_check_interval_seconds: 300
+      max_rollback_attempts: 3
+      on_rollback_failure:
+        action: alert_oncall
+        message: "CRITICAL: Automated rollback failed for action {action_id} on case {case_id}. Manual intervention required."
+        channels: [slack, pagerduty]
+
+    error_handling:
+      on_platform_unreachable:
+        action: return_error
+        alert_oncall: true
+        message: "Response platform '{platform}' is unreachable. Manual containment required."
+      on_target_not_found:
+        action: return_error
+        message: "Target '{target}' not found in {platform}. Verify asset registration."
+      on_duplicate_action:
+        action: return_suppressed
+        message: "Duplicate action suppressed. Same action was executed within the dedup window."
+      on_safety_gate_failure:
+        action: return_error
+        message: "Pre-execution safety check failed. Action not taken."
+
+  # ---------------------------------------------------------------------------
+  # create_ticket
+  # Creates incident tickets in ServiceNow or Jira.
+  # ---------------------------------------------------------------------------
+  - name: create_ticket
+    handler: handlers.itsm.TicketCreationHandler
+    authorized_agents: [executor, orchestrator]
+
+    rate_limit:
+      rps: 5
+      burst: 10
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 20
+      total_seconds: 25
+
+    retry:
+      max_attempts: 3
+      backoff_strategy: exponential
+      backoff_base_seconds: 2.0
+
+    platforms:
+      servicenow:
+        endpoint: /api/now/table/incident
+        method: POST
+        auth_mode: basic
+        field_mapping:
+          short_description: "[SENTINEL {case_id}] {alert_type}: {affected_host}"
+          description: "{sherlock_report_summary}\n\nActions Taken:\n{executor_actions_summary}"
+          urgency: "{priority_to_urgency}"
+          impact: "{priority_to_impact}"
+          category: Security Incident
+          subcategory: Malware
+          work_notes: "Auto-created by SENTINEL Autonomous SOC. Case ID: {case_id}"
+        priority_map:
+          CRITICAL: {urgency: 1, impact: 1}
+          HIGH:     {urgency: 1, impact: 2}
+          MEDIUM:   {urgency: 2, impact: 2}
+          LOW:      {urgency: 3, impact: 3}
+          INFO:     {urgency: 3, impact: 3}
+
+      jira:
+        endpoint: /rest/api/3/issue
+        method: POST
+        auth_mode: basic
+        field_mapping:
+          summary: "[SENTINEL {case_id}] {alert_type}: {affected_host}"
+          description: "{sherlock_report_summary}"
+          priority:
+            name: "{priority}"
+          labels: ["sentinel", "security-incident", "autonomous-response"]
+          customfield_sentinel_case_id: "{case_id}"
+
+    dedup:
+      enabled: true
+      dedup_key_fields: [case_id, platform]
+      window_seconds: 3600
+      on_duplicate: return_existing_ticket_id
+
+    error_handling:
+      on_itsm_unavailable:
+        action: queue_for_retry
+        retry_after_seconds: 60
+        max_retries: 5
+      on_auth_failure:
+        action: return_error
+        alert_oncall: true
+
+  # ---------------------------------------------------------------------------
+  # notify_stakeholders
+  # Sends Slack/PagerDuty/email notifications with case context.
+  # ---------------------------------------------------------------------------
+  - name: notify_stakeholders
+    handler: handlers.notification.NotificationHandler
+    authorized_agents: [executor, orchestrator]
+
+    rate_limit:
+      rps: 10
+      burst: 20
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 3
+      read_seconds: 15
+      total_seconds: 18
+
+    retry:
+      max_attempts: 3
+      backoff_strategy: exponential
+      backoff_base_seconds: 1.0
+
+    message_templates:
+      alert:
+        slack: |
+          :rotating_light: *SENTINEL ALERT* | {priority} | Case `{case_id}`
+          *Type:* {alert_type}
+          *Host:* `{affected_host}` | *User:* `{affected_user}`
+          *Risk Score:* {risk_score}/100
+          *Classification:* {classification}
+          *Actions Taken:* {actions_summary}
+          <{splunk_case_url}|View in SENTINEL War Room>
+        pagerduty:
+          severity: "{urgency}"
+          summary: "SENTINEL {priority}: {alert_type} on {affected_host}"
+          source: "sentinel-{case_id}"
+        email:
+          subject: "[SENTINEL {priority}] {alert_type} - Case {case_id}"
+          body_template: templates/email_alert.html
+
+      update:
+        slack: |
+          :information_source: *SENTINEL UPDATE* | Case `{case_id}`
+          *Status:* {status}
+          *Update:* {update_message}
+
+      resolved:
+        slack: |
+          :white_check_mark: *SENTINEL RESOLVED* | Case `{case_id}`
+          *Outcome:* {resolution}
+          *MTTR:* {mttr_minutes} minutes
+          *Actions:* {actions_count} containment actions executed autonomously
+
+    platforms:
+      slack:
+        endpoint: https://slack.com/api/chat.postMessage
+        method: POST
+        auth_header: "Bearer {bot_token}"
+        fallback_channel: "#soc-alerts"
+
+      pagerduty:
+        endpoint: https://events.pagerduty.com/v2/enqueue
+        method: POST
+        event_action: trigger
+
+      email:
+        smtp_host: localhost
+        smtp_port: 25
+        from_address: sentinel@your-org.internal
+        use_tls: false
+
+    error_handling:
+      on_channel_failure:
+        action: try_fallback
+        fallback_channels: [slack, pagerduty, email]
+        on_all_channels_failed:
+          action: log_critical
+          message: "ALL notification channels failed for case {case_id}."

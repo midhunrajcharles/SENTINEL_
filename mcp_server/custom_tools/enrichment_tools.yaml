@@ -1,0 +1,348 @@
+# =============================================================================
+# SENTINEL: Autonomous Agentic SOC Commander
+# enrichment_tools.yaml — Threat intelligence tool runtime configuration
+#
+# Enrichment tools query external threat intelligence platforms. The key
+# design constraints here are:
+#
+#   1. External API rate limits are real and enforced — aggressive caching
+#      in the threat_intel_cache KV Store is mandatory.
+#   2. External calls MUST have a timeout and a graceful degradation path
+#      so a slow VirusTotal response never blocks the triage pipeline.
+#   3. IOC whitelist must be checked BEFORE any external call to prevent
+#      leaking internal infrastructure details to public threat intel services.
+#   4. All lookups must be logged to sentinel_audit for later deconfliction.
+# =============================================================================
+
+---
+tool_group: enrichment
+description: Threat intelligence enrichment tools available to Vanguard, Sherlock, and Sage
+version: "1.0.0"
+authorized_agents:
+  - vanguard
+  - sherlock
+  - sage
+
+cache:
+  backend: splunk_kvstore
+  collection: threat_intel_cache
+  default_ttl_seconds: 86400
+  max_entries: 50000
+  eviction_policy: lru
+  stale_while_revalidate: true
+  stale_revalidate_window_seconds: 3600
+
+whitelist:
+  check_before_external_lookup: true
+  lookup_name: ioc_whitelist_lookup
+  on_whitelisted:
+    action: return_whitelisted
+    skip_external_sources: true
+
+defaults:
+  timeout:
+    connect_seconds: 3
+    read_seconds: 15
+    total_seconds: 18
+  retry:
+    max_attempts: 2
+    backoff_strategy: exponential
+    backoff_base_seconds: 2.0
+    retry_on_status: [429, 500, 502, 503, 504]
+    do_not_retry_on_status: [400, 401, 403, 404]
+  on_source_unavailable:
+    action: return_partial
+    mark_source_as: unavailable
+
+tools:
+
+  # ---------------------------------------------------------------------------
+  # enrich_threat_intel
+  # Aggregates results from VirusTotal, MISP, and AbuseIPDB into a single
+  # enriched verdict. Sources are queried in parallel; partial results are
+  # returned if one source times out or is unavailable.
+  # ---------------------------------------------------------------------------
+  - name: enrich_threat_intel
+    handler: handlers.threat_intel.ThreatIntelEnricher
+    execution_mode: parallel_fanout
+
+    rate_limit:
+      rps: 3
+      burst: 6
+      strategy: token_bucket
+      exceeded_action: queue
+      queue_max_depth: 50
+      queue_timeout_seconds: 30
+
+    timeout:
+      connect_seconds: 3
+      read_seconds: 15
+      total_seconds: 20
+
+    ioc_type_routing:
+      ip:
+        sources: [virustotal, abuseipdb, misp]
+        primary_verdict_source: abuseipdb
+        secondary_verdict_source: virustotal
+      domain:
+        sources: [virustotal, misp]
+        primary_verdict_source: virustotal
+      url:
+        sources: [virustotal]
+        primary_verdict_source: virustotal
+      md5:
+        sources: [virustotal, misp]
+        primary_verdict_source: virustotal
+      sha1:
+        sources: [virustotal, misp]
+        primary_verdict_source: virustotal
+      sha256:
+        sources: [virustotal, misp]
+        primary_verdict_source: virustotal
+
+    verdict_logic:
+      malicious_thresholds:
+        virustotal_detections_min: 5
+        abuseipdb_confidence_min: 50
+        misp_events_min: 1
+      suspicious_thresholds:
+        virustotal_detections_min: 1
+        abuseipdb_confidence_min: 20
+      confidence_formula: >
+        weighted_avg(
+          virustotal_score * 0.5,
+          abuseipdb_normalized * 0.35,
+          misp_presence * 0.15
+        )
+
+    sources:
+
+      # -----------------------------------------------------------------------
+      # VirusTotal v3 API
+      # Free tier: 4 requests/minute, 500/day
+      # Premium: 20,000/day, retro hunting, behavior reports
+      # -----------------------------------------------------------------------
+      virustotal:
+        enabled: true
+        base_url: https://www.virustotal.com/api/v3
+        auth_header: "x-apikey"
+        auth_token_ref: virustotal.api_key
+
+        endpoints:
+          ip: /ip_addresses/{ioc_value}
+          domain: /domains/{ioc_value}
+          url: /urls/{url_id}
+          md5: /files/{ioc_value}
+          sha1: /files/{ioc_value}
+          sha256: /files/{ioc_value}
+
+        url_id_generation:
+          method: base64_url_encode
+          field: ioc_value
+
+        rate_limit:
+          requests_per_minute: 4
+          requests_per_day: 500
+          strategy: sliding_window
+          exceeded_action: queue
+          queue_max_depth: 100
+          daily_quota_reset_time: "00:00:00 UTC"
+
+        timeout:
+          connect_seconds: 3
+          read_seconds: 12
+          total_seconds: 15
+
+        retry:
+          max_attempts: 2
+          backoff_strategy: exponential
+          backoff_base_seconds: 15.0
+          retry_on_status: [429, 500, 502]
+
+        cache:
+          ttl_seconds: 86400
+          ttl_for_clean: 3600
+          ttl_for_unknown: 1800
+
+        response_mapping:
+          detections: data.attributes.last_analysis_stats.malicious
+          total_engines: >
+            data.attributes.last_analysis_stats.malicious +
+            data.attributes.last_analysis_stats.suspicious +
+            data.attributes.last_analysis_stats.undetected +
+            data.attributes.last_analysis_stats.harmless
+          malware_families: data.attributes.popular_threat_name
+          score: >
+            data.attributes.last_analysis_stats.malicious /
+            (data.attributes.last_analysis_stats.malicious +
+             data.attributes.last_analysis_stats.suspicious +
+             data.attributes.last_analysis_stats.undetected +
+             data.attributes.last_analysis_stats.harmless)
+          permalink: >
+            "https://www.virustotal.com/gui/ip-address/" + data.id
+
+        error_handling:
+          on_not_found:
+            verdict_contribution: unknown
+            message: "IOC not found in VirusTotal database."
+          on_quota_exceeded:
+            action: return_cached_or_skip
+            log_level: WARNING
+          on_timeout:
+            action: skip_source
+            mark_as: timeout
+
+      # -----------------------------------------------------------------------
+      # AbuseIPDB
+      # Best source for IP reputation; free tier: 1,000 lookups/day
+      # Only applicable to IP IOC type
+      # -----------------------------------------------------------------------
+      abuseipdb:
+        enabled: true
+        base_url: https://api.abuseipdb.com/api/v2
+        auth_header: "Key"
+        auth_token_ref: abuseipdb.api_key
+        applicable_ioc_types: [ip]
+
+        endpoints:
+          ip: /check
+
+        request_params:
+          ip: /check
+          params:
+            ipAddress: "{ioc_value}"
+            maxAgeInDays: 90
+            verbose: true
+
+        rate_limit:
+          requests_per_day: 1000
+          strategy: daily_quota
+          exceeded_action: skip_source
+          daily_quota_reset_time: "00:00:00 UTC"
+
+        timeout:
+          connect_seconds: 3
+          read_seconds: 10
+          total_seconds: 12
+
+        cache:
+          ttl_seconds: 43200
+          ttl_for_clean: 7200
+          ttl_for_unknown: 3600
+
+        response_mapping:
+          abuse_confidence_score: data.abuseConfidenceScore
+          total_reports: data.totalReports
+          country_code: data.countryCode
+          isp: data.isp
+          usage_type: data.usageType
+          is_tor: data.isTor
+          is_public: data.isPublic
+
+        normalized_score_formula: "data.abuseConfidenceScore / 100.0"
+
+        error_handling:
+          on_not_found:
+            verdict_contribution: unknown
+          on_quota_exceeded:
+            action: skip_source
+            log_level: INFO
+          on_timeout:
+            action: skip_source
+            mark_as: timeout
+
+      # -----------------------------------------------------------------------
+      # MISP — Internal/Community Threat Intelligence Platform
+      # Returns matching event IDs and tag sets for cross-referencing
+      # incidents with known campaigns, threat actors, and TTPs.
+      # -----------------------------------------------------------------------
+      misp:
+        enabled: true
+        base_url_ref: misp.base_url
+        auth_header: "Authorization"
+        auth_token_ref: misp.auth_key
+        verify_ssl_ref: misp.verify_ssl
+
+        endpoints:
+          ip:     /attributes/restSearch
+          domain: /attributes/restSearch
+          url:    /attributes/restSearch
+          md5:    /attributes/restSearch
+          sha1:   /attributes/restSearch
+          sha256: /attributes/restSearch
+
+        request_body_template:
+          returnFormat: json
+          type: "{misp_attribute_type}"
+          value: "{ioc_value}"
+          to_ids: true
+          includeContext: true
+          limit: 20
+
+        misp_attribute_type_map:
+          ip:     ip-dst
+          domain: domain
+          url:    url
+          md5:    md5
+          sha1:   sha1
+          sha256: sha256
+
+        rate_limit:
+          rps: 5
+          burst: 10
+          strategy: token_bucket
+
+        timeout:
+          connect_seconds: 3
+          read_seconds: 12
+          total_seconds: 15
+
+        cache:
+          ttl_seconds: 3600
+          ttl_for_no_match: 900
+
+        response_mapping:
+          event_count: response.Attribute | length
+          event_ids: response.Attribute[*].event_id | unique
+          tags: response.Attribute[*].Tag[*].name | flatten | unique
+          galaxies: response.Attribute[*].Galaxy[*].name | flatten | unique
+
+        error_handling:
+          on_unreachable:
+            action: skip_source
+            log_level: WARNING
+            message: "MISP instance unreachable. Skipping MISP enrichment."
+          on_auth_failure:
+            action: disable_source_temporarily
+            disable_for_minutes: 30
+            log_level: ERROR
+          on_timeout:
+            action: skip_source
+            mark_as: timeout
+
+    post_processing:
+      harvest_new_iocs:
+        enabled: true
+        extract_related_iocs: true
+        store_in_index: sentinel_learning
+        sourcetype: sentinel:sage:ioc_harvest
+
+      auto_update_kvstore:
+        enabled: true
+        collection: threat_intel_cache
+        write_on_verdict: [malicious, suspicious]
+
+      add_to_watchlist_on_verdict:
+        enabled: false
+        verdict_threshold: malicious
+        watchlist_name: SENTINEL_WATCHLIST
+
+    error_handling:
+      on_all_sources_failed:
+        action: return_unknown
+        verdict: unknown
+        confidence: 0.0
+        message: "All threat intelligence sources failed or were unavailable. Manual lookup recommended."
+      on_whitelist_check_failed:
+        action: proceed_without_whitelist
+        log_level: WARNING

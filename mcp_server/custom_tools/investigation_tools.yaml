@@ -1,0 +1,473 @@
+# =============================================================================
+# SENTINEL: Autonomous Agentic SOC Commander
+# investigation_tools.yaml — Investigation tool runtime configuration
+#
+# These YAML stanzas extend the JSON schema definitions in tool_definitions.json
+# with runtime behavior: rate limits, timeouts, retry logic, error handling,
+# and Splunk REST endpoint mappings. Loaded by the MCP Server at startup.
+# =============================================================================
+
+---
+tool_group: investigation
+description: Tools available to Vanguard (triage) and Sherlock (investigation) agents
+version: "1.0.0"
+
+defaults:
+  retry:
+    max_attempts: 3
+    backoff_strategy: exponential
+    backoff_base_seconds: 1.0
+    backoff_max_seconds: 30.0
+    retry_on_status: [429, 500, 502, 503, 504]
+  timeout_seconds: 30
+  log_level: INFO
+
+tools:
+
+  # ---------------------------------------------------------------------------
+  # search_spl
+  # Executes arbitrary SPL against Splunk REST API (/services/search/jobs).
+  # ---------------------------------------------------------------------------
+  - name: search_spl
+    handler: handlers.splunk_search.SplunkSearchHandler
+    endpoint: /services/search/jobs
+    method: POST
+
+    rate_limit:
+      rps: 5
+      burst: 10
+      strategy: token_bucket
+      exceeded_action: queue
+      queue_max_depth: 20
+      queue_timeout_seconds: 60
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 120
+      total_seconds: 130
+
+    retry:
+      max_attempts: 2
+      backoff_strategy: fixed
+      backoff_base_seconds: 5.0
+      retry_on_status: [500, 503]
+
+    safety:
+      # Block SPL commands that could exfiltrate data or write outside approved paths
+      blocked_commands:
+        - sendemail
+        - outputlookup
+        - outputcsv
+        - collect
+        - crawl
+      # Enforce a hard cap on time range to prevent runaway searches
+      max_time_range_days: 90
+      # Automatically append | head {max_results} if not present
+      auto_limit_results: true
+      # Strip comments from SPL before execution to prevent injection via comment blocks
+      strip_comments: true
+
+    post_processing:
+      # Automatically decode any base64-encoded fields in results
+      decode_base64_fields: true
+      # Truncate any single field value exceeding this length (prevent memory exhaustion)
+      max_field_value_length: 10240
+      # Add execution metadata to every response
+      inject_metadata: true
+
+    error_handling:
+      on_search_failure:
+        action: return_error
+        include_splunk_messages: true
+      on_timeout:
+        action: return_partial
+        message: "Search timed out; partial results returned."
+      on_quota_exceeded:
+        action: return_error
+        message: "Splunk concurrent search quota exceeded. Retry in 30 seconds."
+
+  # ---------------------------------------------------------------------------
+  # get_indexes
+  # Calls /services/data/indexes to list available indexes.
+  # Cached aggressively — index list rarely changes during an investigation.
+  # ---------------------------------------------------------------------------
+  - name: get_indexes
+    handler: handlers.splunk_meta.IndexListHandler
+    endpoint: /services/data/indexes
+    method: GET
+
+    rate_limit:
+      rps: 30
+      burst: 60
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 3
+      read_seconds: 10
+      total_seconds: 12
+
+    cache:
+      enabled: true
+      ttl_seconds: 300
+      key_fields: [filter, include_internal]
+
+    error_handling:
+      on_failure:
+        action: return_cached
+        message: "Index list unavailable; returning cached result."
+
+  # ---------------------------------------------------------------------------
+  # run_saved_search
+  # Dispatches a saved search by name using /services/saved/searches/{name}/dispatch.
+  # Safer than search_spl for high-frequency operations.
+  # ---------------------------------------------------------------------------
+  - name: run_saved_search
+    handler: handlers.splunk_search.SavedSearchHandler
+    endpoint: /services/saved/searches/{search_name}/dispatch
+    method: POST
+
+    rate_limit:
+      rps: 10
+      burst: 20
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 300
+      total_seconds: 310
+
+    retry:
+      max_attempts: 3
+      backoff_strategy: exponential
+      backoff_base_seconds: 2.0
+
+    safety:
+      # Only allow searches owned by the sentinel app namespace
+      require_app_namespace: sentinel
+      allow_external_namespaces:
+        - search
+        - splunk_security_essentials
+
+    error_handling:
+      on_not_found:
+        action: return_error
+        message: "Saved search '{search_name}' not found. Verify the search name in savedsearches.conf."
+      on_failure:
+        action: return_error
+        include_splunk_messages: true
+
+  # ---------------------------------------------------------------------------
+  # validate_spl
+  # Uses /services/search/parser to validate SPL syntax without executing.
+  # Strongly cached — same SPL string always produces the same validation result.
+  # ---------------------------------------------------------------------------
+  - name: validate_spl
+    handler: handlers.splunk_meta.SPLValidationHandler
+    endpoint: /services/search/parser
+    method: GET
+
+    rate_limit:
+      rps: 20
+      burst: 40
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 3
+      read_seconds: 10
+      total_seconds: 12
+
+    cache:
+      enabled: true
+      ttl_seconds: 3600
+      key_fields: [spl]
+      hash_key: true
+
+    post_processing:
+      # Augment parser response with custom performance heuristics
+      estimate_scan_cost: true
+      flag_missing_indexes: true
+      detect_inefficient_patterns:
+        - pattern: "^search\\s+\\*"
+          warning: "Wildcard index search is expensive. Specify an index."
+        - pattern: "\\|\\s*join\\s+"
+          warning: "JOIN commands are memory-intensive. Consider stats or tstats."
+
+    error_handling:
+      on_failure:
+        action: return_error
+        message: "SPL validation service unavailable."
+
+  # ---------------------------------------------------------------------------
+  # get_knowledge_objects
+  # Calls multiple Splunk REST endpoints to aggregate knowledge objects.
+  # Uses a fanout pattern — parallel requests to each object type endpoint.
+  # ---------------------------------------------------------------------------
+  - name: get_knowledge_objects
+    handler: handlers.splunk_meta.KnowledgeObjectHandler
+    endpoints:
+      datamodel: /services/datamodel/model
+      field_extraction: /services/data/transforms/extractions
+      event_type: /services/saved/eventtypes
+      tag: /services/search/tags
+      macro: /services/configs/conf-macros
+    method: GET
+    fanout: true
+
+    rate_limit:
+      rps: 10
+      burst: 20
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 3
+      read_seconds: 15
+      total_seconds: 18
+
+    cache:
+      enabled: true
+      ttl_seconds: 600
+      key_fields: [object_type, filter, sourcetype]
+
+    error_handling:
+      on_partial_failure:
+        action: return_partial
+        message: "Some knowledge object endpoints failed; partial results returned."
+
+  # ---------------------------------------------------------------------------
+  # query_es_notable
+  # Searches the notable index in Splunk ES using the REST notable API.
+  # ---------------------------------------------------------------------------
+  - name: query_es_notable
+    handler: handlers.splunk_es.NotableQueryHandler
+    endpoint: /services/search/jobs
+    method: POST
+    spl_template: >
+      index=notable
+      {notable_id_filter}
+      {host_filter}
+      {user_filter}
+      {severity_filter}
+      {status_filter}
+      earliest={earliest}
+      latest={latest}
+      | eval time=strftime(_time,"%Y-%m-%dT%H:%M:%SZ")
+      | rename dest AS host
+      | table event_id, rule_name, severity, host, user, risk_score, status,
+              owner, time, annotations, contributing_events
+      | sort -time
+      | head {max_results}
+
+    rate_limit:
+      rps: 15
+      burst: 30
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 30
+      total_seconds: 35
+
+    cache:
+      enabled: false
+
+    error_handling:
+      on_es_unavailable:
+        action: return_error
+        message: "Splunk ES is not available or notable index does not exist. Verify ES installation."
+
+  # ---------------------------------------------------------------------------
+  # get_asset_context
+  # Queries the asset_criticality lookup and ES Asset Center KV Store.
+  # ---------------------------------------------------------------------------
+  - name: get_asset_context
+    handler: handlers.splunk_es.AssetContextHandler
+    endpoint: /services/search/jobs
+    method: POST
+    spl_template: >
+      | inputlookup asset_criticality_lookup
+      | search {identifier_filter}
+      | eval last_seen=strftime(last_seen, "%Y-%m-%dT%H:%M:%SZ")
+      {vuln_join}
+      | head 1
+
+    rate_limit:
+      rps: 20
+      burst: 40
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 3
+      read_seconds: 15
+      total_seconds: 18
+
+    cache:
+      enabled: true
+      ttl_seconds: 120
+      key_fields: [asset_identifier, identifier_type, include_vulnerabilities]
+
+    fallback:
+      on_miss:
+        return_defaults: true
+        default_criticality_score: 1.0
+        default_criticality_label: MEDIUM
+        default_environment: unknown
+
+    error_handling:
+      on_lookup_missing:
+        action: return_defaults
+        message: "Asset not found in CMDB lookup. Returning default criticality values."
+
+  # ---------------------------------------------------------------------------
+  # get_process_tree
+  # Reconstructs process ancestry from Sysmon or CrowdStrike EDR telemetry.
+  # Uses a recursive CTE-style SPL pattern with eval-based tree building.
+  # ---------------------------------------------------------------------------
+  - name: get_process_tree
+    handler: handlers.edr.ProcessTreeHandler
+    endpoint: /services/search/jobs
+    method: POST
+    spl_template: >
+      index=endpoint host={host}
+      earliest={earliest} latest={latest}
+      {process_filter}
+      | eval process_start=strftime(_time,"%Y-%m-%dT%H:%M:%SZ")
+      | stats
+          values(process_path) AS process_path,
+          values(process_hash_sha256) AS process_hash_sha256,
+          values(process_hash_md5) AS process_hash_md5,
+          values(user) AS user,
+          min(process_start) AS start_time,
+          values(dest_ip) AS dest_ips,
+          values(dest_port) AS dest_ports,
+          values(file_path) AS file_paths,
+          values(file_action) AS file_actions
+        BY pid, process_name, parent_process_id, parent_process_name, command_line
+      | sort start_time
+
+    rate_limit:
+      rps: 5
+      burst: 10
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 60
+      total_seconds: 65
+
+    post_processing:
+      build_tree: true
+      detect_suspicious_indicators:
+        - name: encoded_command_argument
+          pattern: "(?i)-e(nc(odedcommand)?)? [A-Za-z0-9+/=]{20,}"
+          field: command_line
+        - name: network_connection_from_powershell
+          pattern: "(?i)powershell"
+          field: process_name
+          requires_field: dest_ips
+        - name: executable_dropped_in_temp
+          pattern: "(?i)(\\\\temp\\\\|\\\\appdata\\\\local\\\\temp\\\\).+\\.exe"
+          field: file_paths
+        - name: parent_process_mismatch
+          description: "Process spawned by unexpected parent (e.g., word.exe spawning cmd.exe)"
+          field: parent_process_name
+
+    error_handling:
+      on_no_results:
+        action: return_empty
+        message: "No process telemetry found for the specified host and time range."
+      on_edr_unavailable:
+        action: return_error
+        message: "EDR data source unavailable. Verify endpoint index configuration."
+
+  # ---------------------------------------------------------------------------
+  # get_network_flows
+  # Queries NetFlow, Zeek, or firewall session data from the network index.
+  # Automatically selects the richest available sourcetype.
+  # ---------------------------------------------------------------------------
+  - name: get_network_flows
+    handler: handlers.network.NetworkFlowHandler
+    endpoint: /services/search/jobs
+    method: POST
+    spl_template: >
+      index=network {host_filter}
+      earliest={earliest} latest={latest}
+      {direction_filter}
+      {port_filter}
+      {protocol_filter}
+      {external_filter}
+      | eval
+          bytes_out=coalesce(bytes_out, bytes_sent, 0),
+          bytes_in=coalesce(bytes_in, bytes_received, 0),
+          start_time=strftime(_time,"%Y-%m-%dT%H:%M:%SZ")
+      | iplocation dest_ip prefix=geo_
+      | where (bytes_out+bytes_in) >= {min_bytes}
+      | table src_ip, dest_ip, dest_port, protocol, bytes_in, bytes_out,
+              duration, start_time, geo_Country AS geo_country,
+              geo_City AS geo_city, action
+      | sort -bytes_out
+      | head {max_results}
+
+    rate_limit:
+      rps: 10
+      burst: 20
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 60
+      total_seconds: 65
+
+    post_processing:
+      compute_totals: true
+      flag_known_bad_geos:
+        enabled: true
+        high_risk_countries: [CN, RU, KP, IR, BY]
+
+    error_handling:
+      on_no_results:
+        action: return_empty
+        message: "No network flow data found for the specified host and time range."
+
+  # ---------------------------------------------------------------------------
+  # get_user_activity
+  # Retrieves UEBA timeline from identity and authentication log sources.
+  # ---------------------------------------------------------------------------
+  - name: get_user_activity
+    handler: handlers.identity.UserActivityHandler
+    endpoint: /services/search/jobs
+    method: POST
+    spl_template: >
+      index=identity OR index=endpoint
+      user={user}
+      earliest={earliest} latest={latest}
+      {event_type_filter}
+      | eval
+          time=strftime(_time,"%Y-%m-%dT%H:%M:%SZ"),
+          anomaly_score=coalesce(risk_score_user_normalized, 0)
+      | lookup asset_criticality_lookup asset_name AS src OUTPUT environment
+      | table time, event_type, action, src, dest, result, anomaly_score, risk_score
+      | sort time
+      | head {max_events}
+
+    rate_limit:
+      rps: 10
+      burst: 20
+      strategy: token_bucket
+
+    timeout:
+      connect_seconds: 5
+      read_seconds: 60
+      total_seconds: 65
+
+    post_processing:
+      compute_impossible_travel: true
+      load_baseline:
+        enabled: true
+        baseline_index: sentinel_learning
+        baseline_sourcetype: sentinel:sage:user_baseline
+        fallback_on_missing: true
+
+    error_handling:
+      on_no_user_found:
+        action: return_empty
+        message: "No activity found for user '{user}' in the specified time range."

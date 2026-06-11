@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<!--
+  SENTINEL War Room — Main Operations Dashboard
+  war_room.html
+
+  Splunk delivery notes:
+    - Served by Splunk's app server at /en-US/app/sentinel/war_room
+    - Splunk token {{SPLUNK_SESSION_KEY}} is injected by the template engine;
+      replace with require(['splunkjs/ready!'], ...) if converting to Simple XML.
+    - Static assets reference /static/app/sentinel/... per Splunk convention.
+    - Simple XML conversion: wrap each panel in a <row><panel><html> block and
+      reference JS/CSS via <dashboard script="..." stylesheet="...">.
+
+  Keyboard shortcuts: H=Halt  E=Escalate  F=False-Positive  R=Refresh  ?=Help
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SENTINEL — War Room</title>
+
+  <!-- Splunk Simple XML hook: <dashboard stylesheet="sentinel_theme.css"> -->
+  <link rel="stylesheet" href="/static/app/sentinel/css/sentinel_theme.css">
+
+  <!-- Chart.js for sparklines and performance charts (loaded from CDN; swap to local for air-gap) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
+
+  <style>
+    /* Page-specific layout overrides */
+    .investigation-scroll {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding: 0.75rem;
+    }
+
+    .inv-section-title {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      margin-bottom: 0.4rem;
+      padding-bottom: 0.3rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      height: 100%;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+
+    .empty-state svg { opacity: 0.25; }
+
+    #case-count-badge { margin-left: 0.5rem; }
+
+    .health-scroll { overflow-y: auto; padding: 0.75rem; }
+
+    /* Reasoning / Chain-of-Thought explainability timeline */
+    .reasoning-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .reasoning-group {
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--bg-panel-alt);
+    }
+
+    .reasoning-group-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      width: 100%;
+      padding: 0.5rem 0.7rem;
+      background: transparent;
+      border: none;
+      color: var(--text-primary, inherit);
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-align: left;
+    }
+
+    .reasoning-group-header .badge { margin-left: auto; }
+
+    .reasoning-toggle-icon {
+      display: inline-block;
+      transition: transform 0.15s ease;
+      color: var(--text-muted);
+      font-size: 0.7rem;
+    }
+
+    .reasoning-group-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .reasoning-group-body.collapsed { display: none; }
+
+    .reasoning-step {
+      display: flex;
+      gap: 0.6rem;
+      padding: 0.55rem 0.7rem;
+      border-left: 3px solid transparent;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .reasoning-step:last-child { border-bottom: none; }
+
+    .reasoning-step.vanguard { border-left-color: var(--agent-vanguard); }
+    .reasoning-step.sherlock { border-left-color: var(--agent-sherlock); }
+    .reasoning-step.executor { border-left-color: var(--agent-executor); }
+    .reasoning-step.sage     { border-left-color: var(--agent-sage); }
+
+    .reasoning-step-marker {
+      flex: none;
+      width: 1.5rem;
+      height: 1.5rem;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.68rem;
+      font-weight: 700;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+    }
+
+    .reasoning-step-body { flex: 1; min-width: 0; }
+
+    .reasoning-step-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .reasoning-step-row {
+      display: flex;
+      gap: 0.4rem;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    .reasoning-step-row > span:last-child {
+      color: inherit;
+      word-break: break-word;
+    }
+
+    .reasoning-step-label {
+      flex: none;
+      min-width: 6.5rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.62rem;
+      color: var(--text-muted);
+    }
+
+    .reasoning-step-conclusion .reasoning-step-label,
+    .reasoning-step-conclusion span:last-child {
+      color: var(--text-primary, inherit);
+      font-weight: 600;
+    }
+
+    .perf-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.75rem;
+      padding: 0.75rem;
+    }
+
+    /* System Health — fault tolerance: timeouts, retries, dead letters */
+    .panel-system-health { grid-column: 1 / -1; }
+    .health-block-title {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-muted); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem;
+    }
+    .health-state-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .health-agent-grid { display: flex; flex-direction: column; gap: 0.45rem; }
+    .health-agent-row {
+      display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem;
+    }
+    .health-agent-name { min-width: 64px; font-weight: 600; }
+    .health-agent-label { flex: 1; }
+    .health-dot {
+      width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0;
+    }
+    .health-dot.green  { background: var(--low);      box-shadow: 0 0 6px var(--low); }
+    .health-dot.yellow { background: var(--medium);   box-shadow: 0 0 6px var(--medium); }
+    .health-dot.red    { background: var(--critical); box-shadow: 0 0 6px var(--critical); animation: pulse-dot 1s infinite; }
+    .approval-remaining { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .approval-remaining.green  { color: var(--low); }
+    .approval-remaining.yellow { color: var(--medium); }
+    .approval-remaining.red    { color: var(--critical); animation: pulse-dot 1.2s infinite; }
+    .approval-actions { display: flex; gap: 0.4rem; }
+    .btn-approve { background: var(--low);      color: #06281a; border: none; }
+    .btn-deny    { background: var(--critical); color: #2a0a0a; border: none; }
+    .btn-approve, .btn-deny { font-size: 0.74rem; padding: 0.3rem 0.6rem; border-radius: 5px; cursor: pointer; font-weight: 600; }
+    .btn-approve:disabled, .btn-deny:disabled { opacity: 0.5; cursor: default; }
+    .attention-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 220px; overflow-y: auto; }
+    .attention-row {
+      display: flex; align-items: center; gap: 0.6rem; font-size: 0.76rem;
+      padding: 0.4rem 0.6rem; border-radius: 6px; background: var(--bg-panel-alt);
+      border-left: 3px solid var(--text-muted);
+    }
+    .attention-row.stuck       { border-left-color: var(--medium); }
+    .attention-row.dead_letter { border-left-color: var(--critical); }
+    .attn-case-id { font-size: 0.72rem; min-width: 90px; }
+    .attn-type    { flex: 1; min-width: 0; }
+    .attn-host    { font-size: 0.7rem; min-width: 80px; }
+    .empty-state-sm { font-size: 0.76rem; color: var(--text-muted); padding: 0.5rem 0; }
+    #attention-block.highlight-flash {
+      animation: health-flash 1.4s ease-out;
+      border-radius: 8px;
+    }
+    @keyframes health-flash {
+      0%   { box-shadow: 0 0 0 2px var(--medium), 0 0 18px var(--medium-dim); }
+      100% { box-shadow: 0 0 0 0 transparent; }
+    }
+    .status-chip.retrying    { background: rgba(77,166,255,0.18);   color: #4da6ff; }
+    .status-chip.stuck       { background: rgba(255,204,0,0.2);     color: #ffcc00; }
+    .status-chip.error       { background: rgba(255,68,68,0.2);     color: #ff4444; }
+    .status-chip.dead_letter { background: rgba(255,68,68,0.3);     color: #ff4444; font-weight: 700; }
+
+    @media (max-width: 1400px) {
+      .page-body {
+        grid-template-columns: 320px 1fr 280px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- =====================================================================
+     PAGE HEADER
+     ===================================================================== -->
+<header class="page-header" role="banner">
+
+  <div class="sentinel-logo" aria-label="SENTINEL">
+    <img src="/static/app/sentinel/images/sentinel_logo.png" alt="" aria-hidden="true">
+    <div>
+      SENTINEL
+      <span class="logo-sub">Autonomous SOC Commander</span>
+    </div>
+  </div>
+
+  <div class="system-status" role="status" aria-live="polite">
+    <div class="status-pill" id="sys-status-pill">
+      <span class="status-dot online" id="sys-status-dot"></span>
+      <span id="sys-status-label">ALL SYSTEMS OPERATIONAL</span>
+    </div>
+
+    <div class="status-pill">
+      <span class="status-dot" id="mcp-status-dot" style="background:var(--status-idle)"></span>
+      <span class="text-muted" style="font-size:0.72rem">MCP</span>
+    </div>
+
+    <div class="status-pill">
+      <span class="status-dot" id="model-status-dot" style="background:var(--status-idle)"></span>
+      <span class="text-muted" style="font-size:0.72rem">MODEL</span>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3">
+    <span class="last-update" id="last-update-ts">Connecting…</span>
+    <button class="btn btn-ghost btn-sm" id="btn-refresh" title="Refresh now (R)" aria-label="Refresh">
+      &#x21bb; Refresh
+    </button>
+    <a href="/en-US/app/sentinel/performance" class="btn btn-ghost btn-sm">Performance</a>
+  </div>
+</header>
+
+<!-- =====================================================================
+     PAGE BODY — 3-column grid
+     ===================================================================== -->
+<main class="page-body" id="page-body">
+
+  <!-- ===================================================================
+       LEFT PANEL — Live case queue
+       =================================================================== -->
+  <section class="panel panel-queue" aria-label="Live Case Queue">
+
+    <div class="panel-header">
+      <h3>
+        Case Queue
+        <span class="badge" id="case-count-badge" aria-label="open cases">0</span>
+      </h3>
+      <button class="btn btn-ghost btn-sm btn-icon" id="btn-new-case"
+              title="Cases refresh automatically" aria-label="Queue info">&#9432;</button>
+    </div>
+
+    <div class="filter-row" role="search">
+      <input class="filter-input" id="queue-filter" type="search"
+             placeholder="Filter cases…" aria-label="Filter case queue">
+      <select class="filter-select" id="queue-status-filter" aria-label="Filter by status">
+        <option value="">All</option>
+        <option value="QUEUED">Queued</option>
+        <option value="TRIAGING">Triaging</option>
+        <option value="INVESTIGATING">Investigating</option>
+        <option value="DECIDING">Deciding</option>
+        <option value="RESPONDING">Responding</option>
+        <option value="HALTED">Halted</option>
+      </select>
+      <select class="filter-select" id="queue-severity-filter" aria-label="Filter by severity">
+        <option value="">Any</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+    </div>
+
+    <div class="panel-body" style="padding:0; overflow:hidden; display:flex; flex-direction:column;">
+      <div style="overflow-x:auto; overflow-y:auto; flex:1;">
+        <table class="case-table" id="case-table" role="grid" aria-label="Case queue">
+          <thead>
+            <tr>
+              <th data-col="case_id"    class="sort-desc" tabindex="0" role="columnheader" aria-sort="descending">ID</th>
+              <th data-col="alert_type"                   tabindex="0" role="columnheader">Alert Type</th>
+              <th data-col="host"                         tabindex="0" role="columnheader">Host</th>
+              <th data-col="risk_score"                   tabindex="0" role="columnheader">Score</th>
+              <th data-col="status"                       tabindex="0" role="columnheader">Status</th>
+              <th data-col="agent"                        tabindex="0" role="columnheader">Agent</th>
+              <th data-col="age"                          tabindex="0" role="columnheader">Age</th>
+            </tr>
+          </thead>
+          <tbody id="case-tbody">
+            <tr>
+              <td colspan="7" style="text-align:center; padding:2rem;">
+                <span class="loading-dot"></span>
+                <span class="loading-dot"></span>
+                <span class="loading-dot"></span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ===================================================================
+       CENTER PANEL — Active investigation viewer
+       =================================================================== -->
+  <section class="panel panel-investigation" aria-label="Active Investigation">
+
+    <!-- Case header / override controls -->
+    <div class="investigation-header" id="inv-header">
+      <div>
+        <div class="case-title" id="inv-case-title">Select a case to investigate</div>
+        <div class="case-subtitle" id="inv-case-sub"></div>
+      </div>
+      <div class="override-controls" id="override-controls" style="display:none">
+        <button class="btn btn-halt"     id="btn-halt"     title="Halt all autonomous actions (H)" aria-label="Halt case">
+          &#x26D4; HALT
+        </button>
+        <button class="btn btn-escalate" id="btn-escalate" title="Force escalate to analyst (E)" aria-label="Escalate case">
+          &#x21A5; ESCALATE
+        </button>
+        <button class="btn btn-fp"       id="btn-fp"       title="Mark as false positive (F)" aria-label="Mark false positive">
+          &#x2715; FALSE POSITIVE
+        </button>
+      </div>
+    </div>
+
+    <div class="investigation-scroll" id="inv-scroll">
+
+      <!-- Empty state -->
+      <div class="empty-state" id="inv-empty">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <span>Click a case in the queue to begin investigation</span>
+      </div>
+
+      <!-- Current SPL query in progress -->
+      <div id="spl-section" class="hidden">
+        <div class="inv-section-title">Current Query</div>
+        <div class="spl-display">
+          <div class="spl-label">
+            <span id="spl-agent-tag" class="agent-dot" style="font-size:0.72rem"></span>
+            &nbsp;·&nbsp; <span id="spl-phase-label"></span>
+          </div>
+          <pre id="spl-code" role="code" aria-label="Current SPL query"></pre>
+          <div class="query-progress" role="progressbar" aria-label="Query progress"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="spl-progress-bar-wrap">
+            <div class="query-progress-bar" id="spl-progress-bar" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent activity feed -->
+      <div id="activity-section" class="hidden">
+        <div class="inv-section-title">Agent Activity Feed</div>
+        <div class="activity-feed" id="activity-feed" role="log" aria-live="polite" aria-label="Agent activity"></div>
+      </div>
+
+      <!-- Timeline -->
+      <div id="timeline-section" class="hidden">
+        <div class="inv-section-title">Investigation Timeline</div>
+        <div class="timeline" id="case-timeline" role="list" aria-label="Case timeline"></div>
+      </div>
+
+      <!-- Reasoning / Chain of Thought — explainability trace per agent -->
+      <div id="reasoning-section" class="hidden">
+        <div class="inv-section-title">
+          Reasoning <span style="text-transform:none; letter-spacing:normal; font-weight:400;">· Chain of Thought</span>
+        </div>
+        <div class="reasoning-timeline" id="reasoning-timeline"
+             role="list" aria-label="Agent chain-of-thought reasoning"></div>
+      </div>
+
+    </div>
+
+    <!-- Keyboard shortcuts bar -->
+    <div class="shortcuts-bar" role="complementary" aria-label="Keyboard shortcuts">
+      <span><kbd class="kbd">H</kbd> Halt</span>
+      <span><kbd class="kbd">E</kbd> Escalate</span>
+      <span><kbd class="kbd">F</kbd> False positive</span>
+      <span><kbd class="kbd">R</kbd> Refresh</span>
+      <span><kbd class="kbd">?</kbd> All shortcuts</span>
+    </div>
+
+  </section>
+
+  <!-- ===================================================================
+       RIGHT PANEL — Agent health monitor
+       =================================================================== -->
+  <section class="panel panel-health" aria-label="Agent Health Monitor">
+
+    <div class="panel-header">
+      <h3>Agent Health</h3>
+      <span class="last-update" id="agent-update-ts" aria-label="Last agent poll"></span>
+    </div>
+
+    <div class="health-scroll">
+
+      <!-- Vanguard -->
+      <div class="agent-card vanguard" id="card-vanguard" role="article" aria-label="Vanguard agent status">
+        <div class="agent-card-header">
+          <div class="agent-name">
+            <span class="agent-name-dot" aria-hidden="true"></span>
+            Vanguard <span style="font-weight:400; color:var(--text-muted); font-size:0.72rem">· Triage</span>
+          </div>
+          <span class="agent-status-badge idle" id="vanguard-status-badge" aria-label="Vanguard status">IDLE</span>
+        </div>
+        <div class="agent-metrics">
+          <div class="agent-metric"><div class="label">Success Rate</div><div class="value" id="vanguard-success">—</div></div>
+          <div class="agent-metric"><div class="label">Queue Depth</div><div class="value" id="vanguard-queue">—</div></div>
+          <div class="agent-metric"><div class="label">Avg Latency</div><div class="value" id="vanguard-latency">—</div></div>
+          <div class="agent-metric"><div class="label">MCP Errors</div><div class="value" id="vanguard-errors">—</div></div>
+        </div>
+        <div class="agent-last-action" id="vanguard-last-action" title="Last action">—</div>
+        <canvas class="sparkline" id="sparkline-vanguard" aria-label="Vanguard 24h activity" role="img"></canvas>
+      </div>
+
+      <!-- Sherlock -->
+      <div class="agent-card sherlock" id="card-sherlock" role="article" aria-label="Sherlock agent status">
+        <div class="agent-card-header">
+          <div class="agent-name">
+            <span class="agent-name-dot" aria-hidden="true"></span>
+            Sherlock <span style="font-weight:400; color:var(--text-muted); font-size:0.72rem">· Investigate</span>
+          </div>
+          <span class="agent-status-badge idle" id="sherlock-status-badge" aria-label="Sherlock status">IDLE</span>
+        </div>
+        <div class="agent-metrics">
+          <div class="agent-metric"><div class="label">Success Rate</div><div class="value" id="sherlock-success">—</div></div>
+          <div class="agent-metric"><div class="label">Queue Depth</div><div class="value" id="sherlock-queue">—</div></div>
+          <div class="agent-metric"><div class="label">Avg Latency</div><div class="value" id="sherlock-latency">—</div></div>
+          <div class="agent-metric"><div class="label">MCP Errors</div><div class="value" id="sherlock-errors">—</div></div>
+        </div>
+        <div class="agent-last-action" id="sherlock-last-action" title="Last action">—</div>
+        <canvas class="sparkline" id="sparkline-sherlock" aria-label="Sherlock 24h activity" role="img"></canvas>
+      </div>
+
+      <!-- Executor -->
+      <div class="agent-card executor" id="card-executor" role="article" aria-label="Executor agent status">
+        <div class="agent-card-header">
+          <div class="agent-name">
+            <span class="agent-name-dot" aria-hidden="true"></span>
+            Executor <span style="font-weight:400; color:var(--text-muted); font-size:0.72rem">· Respond</span>
+          </div>
+          <span class="agent-status-badge idle" id="executor-status-badge" aria-label="Executor status">IDLE</span>
+        </div>
+        <div class="agent-metrics">
+          <div class="agent-metric"><div class="label">Actions Today</div><div class="value" id="executor-actions">—</div></div>
+          <div class="agent-metric"><div class="label">Success Rate</div><div class="value" id="executor-success">—</div></div>
+          <div class="agent-metric"><div class="label">Rollbacks</div><div class="value" id="executor-rollbacks">—</div></div>
+          <div class="agent-metric"><div class="label">MCP Errors</div><div class="value" id="executor-errors">—</div></div>
+        </div>
+        <div class="agent-last-action" id="executor-last-action" title="Last action">—</div>
+        <canvas class="sparkline" id="sparkline-executor" aria-label="Executor 24h activity" role="img"></canvas>
+      </div>
+
+      <!-- Sage -->
+      <div class="agent-card sage" id="card-sage" role="article" aria-label="Sage agent status">
+        <div class="agent-card-header">
+          <div class="agent-name">
+            <span class="agent-name-dot" aria-hidden="true"></span>
+            Sage <span style="font-weight:400; color:var(--text-muted); font-size:0.72rem">· Learn</span>
+          </div>
+          <span class="agent-status-badge idle" id="sage-status-badge" aria-label="Sage status">IDLE</span>
+        </div>
+        <div class="agent-metrics">
+          <div class="agent-metric"><div class="label">IOCs Today</div><div class="value" id="sage-iocs">—</div></div>
+          <div class="agent-metric"><div class="label">Rules Proposed</div><div class="value" id="sage-rules">—</div></div>
+          <div class="agent-metric"><div class="label">FP Rate</div><div class="value" id="sage-fp-rate">—</div></div>
+          <div class="agent-metric"><div class="label">Next Run</div><div class="value" id="sage-next-run" style="font-size:0.7rem">—</div></div>
+        </div>
+        <div class="agent-last-action" id="sage-last-action" title="Last action">—</div>
+        <canvas class="sparkline" id="sparkline-sage" aria-label="Sage 24h activity" role="img"></canvas>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<!-- =====================================================================
+     SYSTEM HEALTH — fault tolerance: state timeouts, retries, dead letters
+     ===================================================================== -->
+<section class="panel panel-system-health" id="system-health-panel" aria-label="System Health"
+         style="margin: 0 1.25rem 1rem;">
+
+  <div class="panel-header">
+    <h3>
+      System Health
+      <span class="badge" id="dlq-count-badge" aria-label="dead letter queue size" title="Cases in the dead letter queue">0</span>
+    </h3>
+    <button class="btn btn-ghost btn-sm" id="btn-dlq-review" title="Jump to cases needing attention" aria-label="Review dead letter queue">
+      Review
+    </button>
+  </div>
+
+  <div class="panel-body" style="padding: 0.85rem 1.1rem; display:flex; flex-wrap:wrap; gap:1.75rem; align-items:flex-start;">
+
+    <div class="health-block" style="flex:1; min-width:240px;">
+      <div class="health-block-title">Active Cases by State</div>
+      <div class="health-state-grid" id="health-state-grid"></div>
+    </div>
+
+    <div class="health-block" style="flex:1; min-width:200px;">
+      <div class="health-block-title">Agent Degradation</div>
+      <div class="health-agent-grid" id="health-agent-grid"></div>
+    </div>
+
+    <div class="health-block" style="flex:1.6; min-width:340px;" id="attention-block">
+      <div class="health-block-title">
+        Cases Needing Attention
+        <span class="badge" id="attention-count-badge">0</span>
+      </div>
+      <div class="attention-list" id="attention-list">
+        <div class="empty-state-sm" id="attention-empty">No stuck or dead-lettered cases — all clear.</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- =====================================================================
+     PENDING APPROVALS — human-in-the-loop gate, made visible & demoable
+     ===================================================================== -->
+<section class="panel panel-approvals" id="approvals-panel" aria-label="Pending Approvals"
+         style="margin: 0 1.25rem 1rem;">
+
+  <div class="panel-header">
+    <h3>
+      Pending Approvals
+      <span class="badge" id="approvals-count-badge" aria-label="pending approval requests" title="Requests awaiting human sign-off">0</span>
+    </h3>
+    <span class="text-muted" style="font-size:0.75rem;">Human-in-the-loop gate &mdash; eradication actions in the CONTAINMENT_APPROVED band require sign-off</span>
+  </div>
+
+  <div class="panel-body" style="padding:0; overflow:hidden;">
+    <table class="case-table" id="approvals-table" role="grid" aria-label="Pending approval requests">
+      <thead>
+        <tr>
+          <th>Request ID</th>
+          <th>Case</th>
+          <th>Action</th>
+          <th>Target</th>
+          <th>Time Remaining</th>
+          <th>Decision</th>
+        </tr>
+      </thead>
+      <tbody id="approvals-tbody"></tbody>
+    </table>
+    <div class="empty-state-sm" id="approvals-empty">No approval requests pending &mdash; all clear.</div>
+  </div>
+</section>
+
+<!-- =====================================================================
+     FOOTER METRICS BAR
+     ===================================================================== -->
+<footer class="panel-footer" role="contentinfo" aria-label="Global metrics">
+
+  <div class="metric-block">
+    <div class="metric-label">Cases Today</div>
+    <div class="metric-value">
+      <span id="metric-total">—</span>
+      <span style="font-size:0.7rem; color:var(--text-muted); font-weight:400"> total</span>
+    </div>
+    <div class="metric-sub">
+      <span class="text-low" id="metric-autonomous">—</span> autonomous ·
+      <span class="text-high" id="metric-escalated">—</span> escalated
+    </div>
+  </div>
+
+  <div class="metric-block">
+    <div class="metric-label">MTTR</div>
+    <div class="metric-value highlight-cyan">
+      <span id="metric-mttr">—</span>
+      <span style="font-size:0.7rem; color:var(--text-muted); font-weight:400"> min</span>
+    </div>
+    <div class="metric-sub">vs. industry <span id="metric-industry-baseline">4.2h</span></div>
+  </div>
+
+  <div class="metric-block">
+    <div class="metric-label">Threats Contained</div>
+    <div class="metric-value highlight-green">
+      <span id="metric-contained">—</span>
+    </div>
+    <div class="metric-sub">this week</div>
+  </div>
+
+  <div class="metric-block">
+    <div class="metric-label">Active Cases</div>
+    <div class="metric-value">
+      <span id="metric-active">—</span>
+    </div>
+    <div class="metric-sub">
+      <span id="metric-critical-count" class="text-critical">—</span> critical
+    </div>
+  </div>
+
+  <div class="metric-block">
+    <div class="metric-label">Weekly Savings</div>
+    <div class="metric-value highlight-green">
+      $<span id="metric-savings">—</span>
+    </div>
+    <div class="metric-sub">est. analyst hours saved</div>
+  </div>
+
+  <div class="metric-block">
+    <div class="metric-label">Detection FP Rate</div>
+    <div class="metric-value">
+      <span id="metric-fp-rate">—</span>
+      <span style="font-size:0.7rem; color:var(--text-muted); font-weight:400">%</span>
+    </div>
+    <div class="metric-sub">7-day rolling</div>
+  </div>
+
+</footer>
+
+<!-- =====================================================================
+     HALT CONFIRMATION MODAL
+     ===================================================================== -->
+<div class="modal-backdrop" id="halt-modal" role="dialog"
+     aria-modal="true" aria-labelledby="halt-title" aria-describedby="halt-desc">
+  <div class="modal">
+    <h2 id="halt-title" style="color:var(--critical)">&#x26D4; Halt Autonomous Actions?</h2>
+    <p id="halt-desc">
+      This will immediately stop all in-progress agent actions for case
+      <strong id="halt-case-id"></strong> and set status to HALTED.
+      The case will require manual analyst review to resume.
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="halt-cancel">Cancel</button>
+      <button class="btn btn-halt"  id="halt-confirm" style="font-size:0.82rem; padding:0.4rem 1rem">
+        Confirm Halt
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Escalate modal -->
+<div class="modal-backdrop" id="escalate-modal" role="dialog"
+     aria-modal="true" aria-labelledby="esc-title">
+  <div class="modal">
+    <h2 id="esc-title" style="color:var(--high)">&#x21A5; Force Escalate?</h2>
+    <p>
+      Case <strong id="esc-case-id"></strong> will be routed to the on-call
+      analyst queue. Autonomous processing will pause pending analyst acknowledgement.
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="esc-cancel">Cancel</button>
+      <button class="btn btn-escalate" id="esc-confirm">Confirm Escalate</button>
+    </div>
+  </div>
+</div>
+
+<!-- False positive modal -->
+<div class="modal-backdrop" id="fp-modal" role="dialog"
+     aria-modal="true" aria-labelledby="fp-title">
+  <div class="modal">
+    <h2 id="fp-title">&#x2715; Mark as False Positive?</h2>
+    <p>
+      Case <strong id="fp-case-id"></strong> will be closed as FALSE_POSITIVE
+      and submitted to Sage for detection-rule learning.
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="fp-cancel">Cancel</button>
+      <button class="btn btn-fp"    id="fp-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container" role="status" aria-live="assertive"></div>
+
+<!-- =====================================================================
+     SCRIPTS
+     Simple XML note: move inline JS to a separate file and reference via
+     <dashboard script="war_room.js">
+     ===================================================================== -->
+<script src="/static/app/sentinel/js/agent_status.js"></script>
+<script src="/static/app/sentinel/js/case_timeline.js"></script>
+<script src="/static/app/sentinel/js/war_room.js"></script>
+</body>
+</html>

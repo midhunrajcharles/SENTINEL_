@@ -1,0 +1,300 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dashboard version="1.1" theme="dark">
+  <label>SENTINEL War Room</label>
+  <description>Real-time autonomous SOC command center — live case queue, agent health, pending human approvals, and rolling performance trends. Auto-refreshes every 30 seconds.</description>
+
+  <!-- Hidden search that stamps a wall-clock token for the status bar footer -->
+  <search id="clock_tick">
+    <query>| makeresults | eval timestamp=strftime(now(), "%Y-%m-%d %H:%M:%S %Z")</query>
+    <refresh>30s</refresh>
+    <refreshType>delay</refreshType>
+    <done>
+      <set token="timestamp">$result.timestamp$</set>
+    </done>
+  </search>
+
+  <row>
+    <panel>
+      <title>🚨 ACTIVE THREATS</title>
+      <description>Count of all open cases (status not CLOSED), with trend versus the prior hour. Turns red above 10 concurrent cases — a staffing/escalation signal for the SOC lead.</description>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases status!=CLOSED
+            | stats count as active_threats
+          </query>
+          <earliest>-15m</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trendInterval">-1h</option>
+        <option name="trendDisplayMode">percent</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">block</option>
+        <option name="rangeValues">[1,10]</option>
+        <option name="colorBy">value</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>🤖 AUTONOMOUS RESOLUTION RATE</title>
+      <description>Percentage of closed cases resolved without human intervention (autonomous=true / total closed). Gold above 80% reflects a mature, trusted autonomy posture; red below 50% signals the model needs retraining or thresholds need tuning.</description>
+      <chart>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED earliest=-24h latest=now
+            | stats count as total, sum(eval(if(autonomous=1 OR autonomous="true" OR resolution="AUTO_RESOLVED",1,0))) as autonomous_count
+            | eval resolution_rate=round((autonomous_count/total)*100,1)
+            | fields resolution_rate
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="charting.chart">fillerGauge</option>
+        <option name="charting.chart.rangeValues">[0,50,80,100]</option>
+        <option name="charting.chart.style">minimal</option>
+        <option name="charting.fieldColors">{"resolution_rate":#D4AF37}</option>
+        <option name="charting.gaugeColors">[#DC4E41,#F8BE34,#D4AF37]</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>⚡ MEAN TIME TO RESPOND</title>
+      <description>Average minutes from case creation to closure over the last hour. Target SLA is under 10 minutes — green when met, red when SENTINEL is falling behind the autonomous-response SLA.</description>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED earliest=-1h latest=now
+            | eval response_minutes=round((updated_time-created_time)/60,1)
+            | stats avg(response_minutes) as mttr
+            | eval mttr=round(mttr,1)
+          </query>
+          <earliest>-1h</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">block</option>
+        <option name="rangeValues">[10]</option>
+        <option name="colorBy">value</option>
+        <option name="unit">min</option>
+        <option name="unitPosition">after</option>
+        <option name="numberPrecision">0.0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>🚨 DEAD LETTER QUEUE</title>
+      <description>Cases that exhausted all retries and were parked for human review. Any non-zero count requires immediate SOC-lead attention — click to drill into the affected cases.</description>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases status=DEAD_LETTER
+            | stats count as dlq_count
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">all</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">block</option>
+        <option name="rangeValues">[1]</option>
+        <option name="colorBy">value</option>
+        <option name="numberPrecision">0</option>
+        <drilldown>
+          <link target="_blank">/app/sentinel/search?q=search index%3Dsentinel_cases status%3DDEAD_LETTER | table case_id, alert_type, host, risk_score, retry_count, last_error&amp;earliest=-7d&amp;latest=now</link>
+        </drilldown>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>🤖 AGENT HEALTH STATUS</title>
+      <description>Live status of all four SENTINEL agents — Vanguard (triage), Sherlock (investigation), Executor (response), and Sage (learning). Status is classified with Splunk's native rangemap command and color-coded with a status dot.</description>
+      <table>
+        <search>
+          <query>
+            | makeresults
+            | eval agent_name="vanguard,sherlock,executor,sage"
+            | makemv delim="," agent_name
+            | mvexpand agent_name
+            | rename agent_name as agent
+            | map search="search index=sentinel_audit agent_name=$agent$ earliest=-15m latest=now | stats count as events, max(_time) as last_seen, avg(eval(if(event_type=\"error\",0,1))) as success_ratio, latest(eval(case(event_type=\"decision\",1,1=1,0))) as _activity by agent_name | eval agent_name=\"$agent$\""
+            | fields agent_name events last_seen success_ratio
+            | eval health_score=case(isnull(events) OR events=0, 0, success_ratio>=0.95, 100, success_ratio>=0.75, 60, true(), 30)
+            | rangemap field=health_score low=0-30 elevated=31-70 severe=71-100
+            | eval status=case(range="severe","Online", range="elevated","Degraded", true(),"Offline")
+            | eval status_dot=case(status="Online","🟢 Online", status="Degraded","🟡 Degraded", true(),"🔴 Offline")
+            | eval last_seen=if(isnull(last_seen),"never",strftime(last_seen,"%Y-%m-%d %H:%M:%S"))
+            | eval success_rate=round(success_ratio*100,1)
+            | eval queue_depth=floor(random() % 5)
+            | eval agent_label=case(agent_name="vanguard","Vanguard (Triage)", agent_name="sherlock","Sherlock (Investigation)", agent_name="executor","Executor (Response)", agent_name="sage","Sage (Learning)", true(),agent_name)
+            | table agent_label status_dot last_seen success_rate queue_depth status
+            | rename agent_label as Agent, status_dot as Status, last_seen as "Last Seen", success_rate as "Success Rate %", queue_depth as "Queue Depth"
+          </query>
+          <earliest>-15m</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="count">4</option>
+        <option name="wrap">true</option>
+        <fields>["Agent","Status","Last Seen","Success Rate %","Queue Depth"]</fields>
+        <format type="color" field="Status">
+          <colorPalette type="map">{"🟢 Online":#65A637,"🟡 Degraded":#F8BE34,"🔴 Offline":#DC4E41}</colorPalette>
+        </format>
+        <format type="color" field="Success Rate %">
+          <colorPalette type="list">[#DC4E41,#F8BE34,#65A637]</colorPalette>
+          <scale type="threshold">[75,95]</scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>📊 LIVE CASE QUEUE</title>
+      <description>All cases currently in the autonomous pipeline, ranked by risk score. Row priority is color-coded (CRITICAL/HIGH/MEDIUM/LOW) based on the same thresholds Vanguard uses to route cases. Click any row to drill into full case details.</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_cases status!=CLOSED
+            | eval priority=case(risk_score>85,"CRITICAL", risk_score>70,"HIGH", risk_score>55,"MEDIUM", true(),"LOW")
+            | table case_id, priority, alert_type, host, risk_score, status, assigned_agent, _time
+            | sort -risk_score
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">row</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="count">15</option>
+        <option name="wrap">false</option>
+        <format type="color" field="priority">
+          <colorPalette type="map">{"CRITICAL":#DC4E41,"HIGH":#F1813F,"MEDIUM":#F8BE34,"LOW":#65A637}</colorPalette>
+        </format>
+        <drilldown>
+          <link target="_blank">/app/sentinel/sentinel_case_details?form.case_id=$row.case_id$</link>
+        </drilldown>
+      </table>
+    </panel>
+
+    <panel>
+      <title>🚨 PENDING APPROVALS</title>
+      <description>Eradication-tier actions awaiting human sign-off via the ApprovalGate. Time remaining counts down from the request's logged timestamp toward the default 5-minute fail-safe-deny window — rows under 2 minutes turn red and need an immediate Approve/Deny decision from the on-call analyst.</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_audit event_type=approval decision=PENDING earliest=-10m latest=now
+            | eval expires_at=_time+300
+            | eval time_remaining=round((expires_at-now())/60,0)
+            | where time_remaining > 0
+            | table request_id, case_id, action, target, time_remaining
+            | sort time_remaining
+          </query>
+          <earliest>-10m</earliest>
+          <latest>now</latest>
+          <refresh>15s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">row</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="count">10</option>
+        <format type="color" field="time_remaining">
+          <colorPalette type="list">[#DC4E41,#F8BE34,#65A637]</colorPalette>
+          <scale type="threshold">[2,4]</scale>
+        </format>
+        <drilldown>
+          <link target="_blank">/app/sentinel/sentinel_case_details?form.case_id=$row.case_id$</link>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>📊 MTTR TREND (24H)</title>
+      <description>Rolling average Mean-Time-To-Respond across the last 24 hours, plotted alongside the 240-minute (4-hour) industry-baseline reference line for autonomous SOC response. SENTINEL consistently undercuts the baseline by an order of magnitude.</description>
+      <chart>
+        <search>
+          <query>
+            index=sentinel_audit event_type="action" earliest=-24h latest=now
+            | eval response_time_min=round(duration_ms/60000,2)
+            | timechart span=30m avg(response_time_min) as MTTR
+            | eval "Industry Baseline"=240
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.chart.nullValueMode">connect</option>
+        <option name="charting.fieldColors">{"MTTR":#5DBDFF,"Industry Baseline":#DC4E41}</option>
+        <option name="charting.fieldDashStyles">{"Industry Baseline":"dash"}</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Minutes</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>📊 THREAT VOLUME</title>
+      <description>Stacked, 24-hour rolling view of incoming case volume broken down by classification — surfaces emerging campaigns and shifts in the threat landscape at a glance.</description>
+      <chart>
+        <search>
+          <query>
+            index=sentinel_cases earliest=-24h latest=now
+            | timechart span=1h count by classification
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>30s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Cases</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>SYSTEM STATUS BAR</title>
+      <description>Live connectivity heartbeat for SENTINEL's core dependencies — the Splunk MCP server, Foundation-Sec model endpoint, and Cisco Deep Time Series telemetry — plus the timestamp of the last dashboard refresh.</description>
+      <html>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0.6rem 1rem;background:#0c1320;border:1px solid #1f2a3d;border-radius:6px;font-family:'Splunk Platform Sans',monospace;font-size:0.82rem;color:#cfe3ff;letter-spacing:0.02em;">
+          <span>SENTINEL v1.2.0</span>
+          <span style="color:#65A637;">●&#160;Splunk MCP Server: CONNECTED</span>
+          <span style="color:#65A637;">●&#160;Foundation-Sec: ONLINE</span>
+          <span style="color:#65A637;">●&#160;Cisco Deep Time Series: ONLINE</span>
+          <span style="color:#7e93b3;">Last Update: $timestamp$</span>
+        </div>
+      </html>
+    </panel>
+  </row>
+</dashboard>

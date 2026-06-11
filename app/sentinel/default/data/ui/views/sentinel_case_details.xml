@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="utf-8"?>
+<form version="1.1" theme="dark">
+  <label>SENTINEL Case Details</label>
+  <description>Deep-dive view into a single autonomous investigation — full chain-of-thought, blast radius, actions taken, and manual override controls. Reached primarily via drilldown from the War Room case queue. Auto-refreshes every 10 seconds while the case is active.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="text" token="case_id" searchWhenChanged="true">
+      <label>Case ID</label>
+      <default>SEN-001</default>
+    </input>
+  </fieldset>
+
+  <!-- Hidden lookup search that hydrates the case-header tokens -->
+  <search id="case_header_lookup">
+    <query>
+      index=sentinel_cases case_id=$case_id$
+      | head 1
+      | eval risk_pct=round(risk_score,0)
+      | table case_id status resolution risk_score risk_pct alert_type host
+    </query>
+    <earliest>-7d</earliest>
+    <latest>now</latest>
+    <refresh>10s</refresh>
+    <refreshType>delay</refreshType>
+    <done>
+      <condition>
+        <set token="case_status">$result.status$</set>
+        <set token="case_risk">$result.risk_pct$</set>
+        <set token="case_alert_type">$result.alert_type$</set>
+        <set token="case_host">$result.host$</set>
+      </condition>
+    </done>
+  </search>
+
+  <row>
+    <panel>
+      <title>🚨 CASE HEADER — $case_id$</title>
+      <description>At-a-glance case identity, lifecycle status, composite risk score, and the two manual-override controls every SOC analyst needs within reach: HALT (freeze the pipeline immediately) and FORCE ESCALATE (hand the case to a human now, bypassing autonomy).</description>
+      <html>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:1.5rem;padding:1rem 1.25rem;background:#0c1320;border:1px solid #1f2a3d;border-radius:8px;font-family:'Splunk Platform Sans',monospace;">
+          <div style="display:flex;align-items:center;gap:1.25rem;">
+            <span style="font-size:1.6rem;font-weight:700;letter-spacing:0.04em;color:#e7eef9;">$case_id$</span>
+            <span style="padding:0.3rem 0.8rem;border-radius:999px;font-size:0.78rem;font-weight:700;letter-spacing:0.06em;background:#1c2a3f;border:1px solid #34507a;color:#9fc4ff;">$case_status$</span>
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:3rem;height:3rem;border-radius:50%;border:3px solid #D4AF37;color:#e7eef9;font-weight:700;font-size:0.95rem;">$case_risk$</span>
+            <span style="color:#7e93b3;font-size:0.8rem;">$case_alert_type$ &#8226; $case_host$</span>
+          </div>
+          <div style="display:flex;gap:0.6rem;">
+            <form method="post" action="/en-US/splunkd/__raw/services/sentinel/cases/$case_id$/halt" target="_blank" style="margin:0;">
+              <button type="submit" style="background:#F8BE34;color:#2a1f06;border:none;border-radius:6px;padding:0.5rem 1rem;font-weight:700;font-size:0.78rem;letter-spacing:0.05em;cursor:pointer;">⏸ HALT CASE</button>
+            </form>
+            <form method="post" action="/en-US/splunkd/__raw/services/sentinel/cases/$case_id$/escalate" target="_blank" style="margin:0;">
+              <button type="submit" style="background:#DC4E41;color:#2a0a0a;border:none;border-radius:6px;padding:0.5rem 1rem;font-weight:700;font-size:0.78rem;letter-spacing:0.05em;cursor:pointer;">⬆ FORCE ESCALATE</button>
+            </form>
+          </div>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>📊 EXECUTIVE SUMMARY</title>
+      <description>Sherlock's plain-language synthesis of the investigation — what happened, why it matters, and what SENTINEL concluded. This is the line a CISO reads first.</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_cases case_id=$case_id$
+            | head 1
+            | spath input=sherlock_report path=executive_summary output=executive_summary
+            | table executive_summary
+            | rename executive_summary as "Executive Summary"
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>10s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">true</option>
+        <option name="count">1</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>🤖 INVESTIGATION TIMELINE</title>
+      <description>Chronological feed of every agent decision recorded to sentinel_audit for this case — confidence and reasoning included. Rows are color-coded by the agent that made the call: Vanguard (blue), Sherlock (purple), Executor (red), Sage (green).</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_audit case_id=$case_id$ event_type=decision
+            | sort _time
+            | table _time, agent_name, decision_type, confidence, reasoning
+            | rename _time as Time, agent_name as Agent, decision_type as Decision, confidence as Confidence, reasoning as Reasoning
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>10s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">true</option>
+        <option name="count">25</option>
+        <format type="color" field="Agent">
+          <colorPalette type="map">{"vanguard":#5DBDFF,"sherlock":#A875FF,"executor":#FF6B6B,"sage":#5CD68C}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>📊 CHAIN OF THOUGHT</title>
+      <description>The complete, unedited explainability trace — every observation→inference step that led each agent to its conclusion — rendered as raw JSON exactly as it was written to sentinel_audit, for full forensic transparency.</description>
+      <html>
+        <pre style="background:#0c1320;border:1px solid #1f2a3d;border-radius:6px;padding:1rem;color:#9fe6b0;font-family:'Splunk Platform Mono',monospace;font-size:0.78rem;line-height:1.45;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-word;">$chain_json$</pre>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <!-- Hidden search powering the Chain of Thought panel above (kept in its own row so it
+         renders nothing visible — Splunk still executes it and binds the $chain_json$ token) -->
+    <panel>
+      <title>🤖 AGENT REASONING</title>
+      <description>Every agent's reasoning chain flattened into observation→inference pairs with the confidence score attached at each step — the audit-grade detail behind the executive summary above.</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_audit case_id=$case_id$ event_type=chain_of_thought
+            | eval chain_json_raw=tojson(chain)
+            | head 1
+            | eval chain_json=chain_json_raw
+            | fields chain_json
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>10s</refresh>
+          <refreshType>delay</refreshType>
+          <done>
+            <condition match="$result.chain_json$ != &quot;&quot;">
+              <set token="chain_json">$result.chain_json$</set>
+            </condition>
+            <condition>
+              <unset token="chain_json"></unset>
+              <set token="chain_json">{ "note": "No chain-of-thought recorded yet for this case." }</set>
+            </condition>
+          </done>
+        </search>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>🤖 AGENT REASONING — STEP BY STEP</title>
+      <description>Same chain-of-thought data, flattened into a sortable table of observation→inference pairs per agent and per step — useful for scanning long investigations without parsing raw JSON.</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_audit case_id=$case_id$ event_type=chain_of_thought
+            | spath path=chain{}
+            | mvexpand chain{}
+            | spath input=chain{} output=step       path=step
+            | spath input=chain{} output=observation path=observation
+            | spath input=chain{} output=inference   path=inference
+            | table agent_name, step, observation, inference, confidence
+            | rename agent_name as Agent, step as Step, observation as Observation, inference as Inference, confidence as Confidence
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>10s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">true</option>
+        <option name="count">50</option>
+        <format type="color" field="Agent">
+          <colorPalette type="map">{"vanguard":#5DBDFF,"sherlock":#A875FF,"executor":#FF6B6B,"sage":#5CD68C}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>🚨 BLAST RADIUS</title>
+      <description>Sherlock's lateral-movement assessment — every host, user, and service this incident touched or threatened to touch. The scope that decides whether this stays autonomous or escalates to a human.</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_cases case_id=$case_id$
+            | head 1
+            | spath input=sherlock_report
+            | eval compromised_hosts=mvjoin('blast_radius.compromised_hosts{}', ", ")
+            | eval targeted_hosts=mvjoin('blast_radius.targeted_hosts{}', ", ")
+            | eval compromised_users=mvjoin('blast_radius.compromised_users{}', ", ")
+            | eval affected_services=mvjoin('blast_radius.affected_services{}', ", ")
+            | table compromised_hosts, targeted_hosts, compromised_users, affected_services
+            | rename compromised_hosts as "Compromised Hosts", targeted_hosts as "Targeted Hosts", compromised_users as "Compromised Users", affected_services as "Affected Services"
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>10s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">true</option>
+        <option name="count">1</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>⚡ ACTIONS TAKEN</title>
+      <description>Every containment or eradication action Executor fired for this case — target, outcome, post-action verification, and the rollback timer attached for reversible actions. Status is color-coded: success (green), failed (red), skipped (yellow).</description>
+      <table>
+        <search>
+          <query>
+            index=sentinel_audit case_id=$case_id$ event_type=action
+            | rename rollback_timer_hours as rollback_timer
+            | table _time, action_type, target, status, verification_result, rollback_timer
+            | rename _time as Time, action_type as Action, target as Target, status as Status, verification_result as "Verification Result", rollback_timer as "Rollback Timer (hrs)"
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>10s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">true</option>
+        <option name="count">25</option>
+        <format type="color" field="Status">
+          <colorPalette type="map">{"SUCCESS":#65A637,"FAILED":#DC4E41,"SKIPPED":#F8BE34}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+</form>

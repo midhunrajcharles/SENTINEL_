@@ -1,0 +1,358 @@
+@startuml SENTINEL_Architecture
+' ============================================================
+' SENTINEL: Autonomous Agentic SOC Commander
+' Full System Architecture — PlantUML Component / Deployment View
+'
+' Render with:
+'   java -jar plantuml.jar architecture_diagram.puml
+'   plantuml architecture_diagram.puml          (CLI)
+'   VS Code extension: jebbs.plantuml
+'
+' Color palette:
+'   Splunk green  #65A637   — Splunk platform components
+'   Red           #FF4444   — Response actions / human override
+'   Blue          #4488FF   — Investigation & AI data flow
+'   Gold          #FFAA00   — Orchestration pipeline
+' ============================================================
+
+title <size:20><b>SENTINEL: Autonomous Agentic SOC Commander</b></size>\n<size:12><color:#888888>Autonomous Triage  →  Investigation  →  Response  →  Learning</color></size>
+
+left to right direction
+
+' ============================================================
+' Global skin
+' ============================================================
+skinparam BackgroundColor               #0D1117
+skinparam DefaultFontName               "Helvetica Neue"
+skinparam DefaultFontColor              #E0E0E0
+skinparam DefaultFontSize               10
+skinparam ArrowColor                    #777777
+skinparam ArrowFontColor                #BBBBBB
+skinparam ArrowFontSize                 9
+skinparam ArrowThickness                1.5
+
+skinparam RectangleBorderColor          #333344
+skinparam RectangleBorderThickness      2
+skinparam RectangleFontColor            #FFFFFF
+skinparam RectangleFontSize             12
+skinparam RectangleFontStyle            bold
+skinparam RectangleBackgroundColor      #161B22
+
+skinparam ComponentBackgroundColor      #21262D
+skinparam ComponentBorderColor          #444455
+skinparam ComponentFontColor            #D0D0E0
+skinparam ComponentFontSize             10
+skinparam ComponentBorderThickness      1
+
+skinparam DatabaseBackgroundColor       #1B2B3B
+skinparam DatabaseBorderColor           #2255AA
+skinparam DatabaseFontColor             #88BBFF
+skinparam DatabaseFontSize              9
+
+skinparam NoteBackgroundColor           #1C2030
+skinparam NoteBorderColor               #4455AA
+skinparam NoteFontColor                 #CCDDFF
+skinparam NoteFontSize                  9
+
+skinparam ActorBackgroundColor          #CC1111
+skinparam ActorBorderColor              #FF4444
+skinparam ActorFontColor                #FFFFFF
+skinparam ActorFontSize                 11
+skinparam ActorFontStyle                bold
+
+skinparam LegendBackgroundColor         #1A1F2B
+skinparam LegendBorderColor             #333355
+skinparam LegendFontColor               #CCCCDD
+skinparam LegendFontSize                10
+
+
+' ============================================================
+' COLUMN 1 — DATA SOURCES
+' ============================================================
+rectangle "  DATA SOURCES  " as C1 #1A1F2B {
+
+  together {
+    component "EDR\n\n<size:9>CrowdStrike Falcon\nSentinelOne XDR\nSysmon / WinEventLog</size>" as SRC_EDR #1E2840
+    component "Firewall\n\n<size:9>Palo Alto NGFW\nCisco FMC\nFortiGate</size>" as SRC_FW #1E2840
+  }
+
+  together {
+    component "Identity\n\n<size:9>Active Directory\nAzure Entra ID\nOkta SCIM</size>" as SRC_IDM #1E2840
+    component "Cloud\n\n<size:9>AWS CloudTrail\nAzure Activity Log\nGCP Audit Logs</size>" as SRC_CL #1E2840
+  }
+
+  component "Network\n\n<size:9>Zeek / Bro\nNetFlow / IPFIX\nWeb Proxy / DNS</size>" as SRC_NET #1E2840
+
+}
+
+
+' ============================================================
+' COLUMN 2 — SPLUNK PLATFORM
+' ============================================================
+rectangle "  SPLUNK PLATFORM  " as C2 #0B1F10 {
+
+  rectangle "<color:#65A637>Splunk Indexes  (CIM-normalised)</color>" as IDXS #0E2614 {
+    database "endpoint / edr\n<size:8>CIM: Endpoint.Processes\nCIM: Endpoint.Filesystem</size>" as IDX_EP  #122A18
+    database "network / dns\n<size:8>CIM: Network.Traffic\nCIM: Network.DNS</size>"          as IDX_NET #122A18
+    database "identity / auth\n<size:8>CIM: Authentication\nCIM: Identity.Management</size>"  as IDX_ID  #122A18
+    database "cloud / proxy\n<size:8>CIM: Web\nCIM: Change.All_Changes</size>"               as IDX_CL  #122A18
+  }
+
+  rectangle "<color:#65A637>Splunk Enterprise 9.x</color>" as SPL_ENT #14361A {
+    component "<b>Enterprise Security (ES)</b>\n<size:9>Risk-Based Alerting (RBA)\nNotable Event Queue\nAsset & Identity Center\nMITRE ATT&CK Overlay</size>" as ES   #1A4A22
+    component "<b>AI Toolkit</b>\n<size:9>Hosted Model Manager\nInference API Gateway\n/services/ml/models/...</size>"                                              as AITK #1A4A22
+    component "<b>KV Store</b>\n<size:9>sentinel_cases collection\nresponse_locks\nbaseline_cache\nrecent_actions</size>"                                          as KVS  #1A4A22
+    component "<b>HEC  :8088</b>\n<size:9>HTTP Event Collector\nAppend-only audit ingestion\nFallback: JSONL on disk</size>"                                       as HEC  #1A4A22
+  }
+
+}
+
+
+' ============================================================
+' COLUMN 3 — MCP & AI LAYER
+' ============================================================
+rectangle "  MCP & AI LAYER  " as C3 #0D1828 {
+
+  rectangle "<color:#4488FF><b>Splunk MCP Server  :3000</b>\n<<  Bidirectional  >>\nHTTPS + Bearer Token\nJSON-RPC 2.0 Transport</color>" as MCP_BOX #121E38 {
+
+    component "<b>Investigation Tools  (read-only)</b>\n\n<size:9>search_spl         validate_spl\nget_asset_context  get_process_tree\nget_network_flows  get_user_activity\nquery_es_notable   run_saved_search\nget_indexes        get_knowledge_objects\nenrich_threat_intel</size>" as MCP_INV #172240
+
+    component "<b><color:#FF8888>Response Tools  (executor-only)</color></b>\n\n<size:9>execute_response_action\n  └ isolate / block / kill / disable\n  └ quarantine / revoke / rotate\ncreate_ticket\nnotify_stakeholders</size>\n\n<size:8><color:#FF8888>Pre-gate: lock → dedup → dry-run\n           audit pre-write → identity check</color></size>" as MCP_RSP #2A1010
+
+  }
+
+  rectangle "AI Models" as AI_BOX #121E38 {
+
+    component "<b>SAIA</b>\n<size:9>Splunk AI Assistant\nNatural Language → SPL\nPhase B / C / D queries\nFallback: built-in templates</size>" as SAIA #172240
+
+    component "<b>Foundation-Sec-1.1-8B-Instruct</b>\n<size:9>Security-fine-tuned LLM\nAlert classification + MITRE mapping\nInvestigation report synthesis\nFallback: rule-based classifier</size>" as FSEC #172240
+
+    component "<b>Cisco Deep Time Series</b>\n<size:9>Anomaly forecasting\nThreshold optimisation\nMTTR / FP trend analysis\nFallback: built-in _TimeSeries</size>" as CDTS #172240
+
+  }
+
+}
+
+
+' ============================================================
+' COLUMN 4 — SENTINEL AGENTS
+' ============================================================
+rectangle "  SENTINEL AGENTS  " as C4 #1C1500 {
+
+  component "<b>SentinelOrchestrator</b>\n\n<size:9>Priority work queue (heapq)\nBoundedSemaphore: 5 concurrent cases\nState machine: QUEUED → TRIAGING →\n  INVESTIGATING → DECIDING →\n  RESPONDING → LEARNING → CLOSED\nRetry: max 3 per case\nAuto-respond threshold: score ≥ 90\n60s poll interval</size>" as ORCH #3D2C00
+
+  rectangle "Agent Pipeline" as PIPE #261E00 {
+
+    component "<b>VANGUARD</b>   Triage Agent\n\n<size:9>Foundation-Sec-1.1-8B inference\nAsset criticality multiplier\n  CRITICAL ×1.5  /  HIGH ×1.2  /  LOW ×0.5\nDecision thresholds:\n  0–15   AUTO_DISMISS\n  16–54  QUEUE_LOW\n  55–69  QUEUE_MED\n  70–84  QUEUE_HIGH\n  85–100 AUTO_ESCALATE\nRule-based fallback (20+ patterns)</size>" as VANG #3D2C00
+
+    component "<b>SHERLOCK</b>   Investigation Agent\n\n<size:9>Phase A: Host Context (get_asset_context,\n         get_process_tree)\nPhase B: Timeline  (SAIA → search_spl)\nPhase C: Lateral Movement\n         (get_network_flows, query_es_notable)\nPhase D: Identity Analysis\n         (get_user_activity)\nPhase E: Threat Intel (enrich_threat_intel)\nBlast Radius calculation\nAdaptive: skips phases on no-data</size>" as SHER #3D2C00
+
+    component "<b>EXECUTOR</b>   Response Agent\n\n<size:9>Autonomy mode ← risk score:\n  FULL_AUTONOMY    ≥85  all actions\n  CONTAINMENT_ONLY 70–84  no eradication\n  MONITORING_ONLY  55–69  no active response\n  DOCUMENT_ONLY    <55   log only\nSafety: rate limit 10/hr\nSafety: cascade guard 3 fails/5min\nSafety: HALT check before each action\nVerification re-query after each action\nRollback timers auto-scheduled</size>" as EXEC #3D2C00
+
+    component "<b>SAGE</b>   Learning Agent\n\n<size:9>Daily sweep: efficacy analysis\n  + IOC harvest + per-case learning\nWeekly: full report + self-tuning\nRule proposal + backtest\n  (FP rate gate: must be ≤5%)\nCisco Deep TS: threshold optimise\n  (max delta: ±5 per tuning cycle)\nCost savings: $85/analyst-hour\nIndustry MTTR baseline: 4.2h</size>" as SAGE #3D2C00
+
+  }
+
+}
+
+
+' ============================================================
+' COLUMN 5 — RESPONSE & OUTPUT
+' ============================================================
+rectangle "  RESPONSE & OUTPUT  " as C5 #1E0808 {
+
+  rectangle "Containment" as R_CONT #2E0C0C {
+    component "isolate_host\n<size:8>CrowdStrike contain\nMicrosoft Defender isolate\nSentinelOne disconnect\nRollback: 4 h</size>"              as ACT_ISO #3C1010
+    component "block_ip\n<size:8>Palo Alto DAG SENTINEL_BLOCKLIST\nCisco FMC access rule\nAWS SG deny\nRollback: 72 h</size>"                   as ACT_BLK #3C1010
+    component "kill_process\n<size:8>CrowdStrike RTR kill\nSentinelOne kill-process\nIrreversible (timer = 0)</size>"                            as ACT_KIL #3C1010
+  }
+
+  rectangle "Eradication" as R_ERAD #2E0C0C {
+    component "disable_user\n<size:8>Azure AD PATCH accountEnabled\nOkta lifecycle/deactivate\nAD LDAP userAccountControl=514\nRollback: 24 h</size>" as ACT_DIS #3C1010
+    component "quarantine_file\n<size:8>CrowdStrike RTR quarantine\nDefender remediation script\nSentinelOne quarantine-files\nRollback: 4 h</size>"  as ACT_QUA #3C1010
+    component "revoke_session\nrotate_credentials\n<size:8>Azure AD revokeSignInSessions\nOkta sessions DELETE\nAWS IAM key rotation\nIrreversible</size>"    as ACT_REV #3C1010
+  }
+
+  rectangle "Notifications & ITSM" as R_NOTIF #0A1530 {
+    component "Slack / PagerDuty / Email\n<size:8>notify_stakeholders\nConfigurable channels\nFallback chain on failure</size>"  as NOTIF  #102040
+    component "ServiceNow / Jira\n<size:8>create_ticket\nDedup: 1 per case+platform\nPriority mapping:\n  CRITICAL → P1, HIGH → P2</size>" as ITSM #102040
+  }
+
+  rectangle "Dashboards" as R_DASH #0A1530 {
+    component "War Room Dashboard\n<size:8>Real-time case state\nAgent health / latency\nHalt / Approve / Reject\nLive audit stream</size>"  as WARR #102040
+    component "Efficacy Dashboard\n<size:8>TP/FP rate trends\nMTTR vs. industry 4.2h\nRule anomaly detection\nSage weekly reports</size>" as EFF  #102040
+  }
+
+  rectangle "Audit & Compliance" as R_AUDIT #0A2020 {
+    database "sentinel_audit  (1yr retention)\n<size:8>HEC append-only\nPre-write INTENT record\nUUID event chain\nFIPSA-compliant</size>"     as AUD_DB  #0F3535
+    database "sentinel_learning\n<size:8>Proposed rules\nDetection baselines\nUser activity baselines\nSage sweep outputs</size>"              as LEARN_DB #0F3535
+  }
+
+}
+
+
+' ============================================================
+' HUMAN OVERRIDE  (actor — interrupt at any stage)
+' ============================================================
+actor "HUMAN\nOVERRIDE" as HUMAN
+
+
+' ============================================================
+' ── ARROWS ──
+'
+' Solid  (-->)  =  synchronous / request-response
+' Dashed (..>)  =  asynchronous / event-driven / fire-and-forget
+' ============================================================
+
+' --- Data Sources → Splunk Indexes ---
+SRC_EDR  -->  IDX_EP  : <color:#555566><size:8>Sysmon / EDR\nevents</size></color>
+SRC_FW   -->  IDX_NET : <color:#555566><size:8>session logs</size></color>
+SRC_IDM  -->  IDX_ID  : <color:#555566><size:8>auth / LDAP\nevents</size></color>
+SRC_CL   -->  IDX_CL  : <color:#555566><size:8>CloudTrail /\nActivity</size></color>
+SRC_NET  -->  IDX_NET : <color:#555566><size:8>NetFlow /\nZeek conn</size></color>
+
+' --- Indexes → ES (CIM normalised events, internal Splunk) ---
+IDX_EP  -->  ES : <color:#65A637><size:8>CIM events</size></color>
+IDX_NET -->  ES
+IDX_ID  -->  ES
+IDX_CL  -->  ES
+
+' --- AI Toolkit → Hosted Models ---
+AITK  -->  FSEC : <color:#4488FF><size:8>inference\nAPI</size></color>
+AITK  -->  CDTS : <color:#4488FF><size:8>forecasting\nAPI</size></color>
+
+' --- ES → Orchestrator (notable alert dispatch) ---
+ES  -->  ORCH : <color:#65A637><b><size:10>Notable\nAlert</size></b></color>
+
+' --- Orchestrator <-> MCP Server (bidirectional tool calls) ---
+ORCH  <-->  MCP_INV : <color:#4488FF><b><size:9>Tool Calls\n(14 MCP tools)</size></b></color>
+
+' --- MCP Server → Splunk back-plane ---
+MCP_INV  <-->  ES   : <color:#65A637><size:8>REST :8089\nsearch/jobs</size></color>
+MCP_INV  <-->  KVS  : <color:#65A637><size:8>KV Store\nR/W</size></color>
+MCP_RSP  -->   HEC  : <color:#65A637><size:8>audit\npre-write</size></color>
+
+' --- MCP Server <-> AI ---
+MCP_INV  <-->  SAIA : <color:#4488FF><size:8>NL → SPL\n:saia endpoint</size></color>
+MCP_INV  <-->  FSEC : <color:#4488FF><size:8>classify /\nsynthesize</size></color>
+MCP_INV  <-->  CDTS : <color:#4488FF><size:8>anomaly /\nthreshold</size></color>
+
+' --- Orchestrator → Agent Pipeline (sync state transitions) ---
+ORCH  -->  VANG : <color:#FFAA00><b>TRIAGING</b></color>
+VANG  -->  SHER : <color:#FFAA00><b>INVESTIGATING</b></color>
+SHER  -->  EXEC : <color:#FFAA00><b>RESPONDING</b></color>
+EXEC  -->  SAGE : <color:#FFAA00><b>LEARNING</b></color>
+SAGE  ..>  ORCH : <color:#FFAA00><size:8>tuning\nfeedback</size></color>
+
+' --- Agents → MCP (investigation queries) ---
+VANG  -->  MCP_INV : <color:#4488FF><size:8>get_asset_context\nquery_es_notable</size></color>
+SHER  -->  MCP_INV : <color:#4488FF><size:8>search_spl\nget_process_tree\nget_network_flows</size></color>
+EXEC  -->  MCP_RSP : <color:#FF4444><size:8>execute_response\n_action</size></color>
+SAGE  -->  MCP_INV : <color:#4488FF><size:8>validate_spl\nrun_saved_search</size></color>
+
+' --- Executor → Response Actions (sync containment) ---
+EXEC  -->  ACT_ISO : <color:#FF4444><b>contain</b></color>
+EXEC  -->  ACT_BLK : <color:#FF4444><b>block</b></color>
+EXEC  -->  ACT_KIL : <color:#FF4444><b>kill</b></color>
+EXEC  -->  ACT_DIS : <color:#FF4444><b>disable</b></color>
+EXEC  -->  ACT_QUA : <color:#FF4444><b>quarantine</b></color>
+EXEC  -->  ACT_REV : <color:#FF4444><b>revoke</b></color>
+EXEC  -->  NOTIF   : <color:#FF4444><size:8>notify_stake\nholders</size></color>
+EXEC  -->  ITSM    : <color:#FF4444><size:8>create_ticket</size></color>
+
+' --- Sage → Dashboards / Learning (async) ---
+SAGE  ..>  EFF      : <color:#4488FF><size:8>weekly report\n& efficacy</size></color>
+SAGE  ..>  LEARN_DB : <color:#4488FF><size:8>proposed rules\n& IOC harvest</size></color>
+
+' --- All agents → Audit Log (async, append-only) ---
+ORCH  ..>  AUD_DB : <color:#555566><size:8>audit</size></color>
+VANG  ..>  AUD_DB : <color:#555566><size:8>triage log</size></color>
+SHER  ..>  AUD_DB : <color:#555566><size:8>investigation\nreport</size></color>
+EXEC  ..>  AUD_DB : <color:#555566><size:8>action log\n(INTENT+OUTCOME)</size></color>
+SAGE  ..>  AUD_DB : <color:#555566><size:8>learning log</size></color>
+
+' --- Dashboards ← Splunk (read) ---
+KVS   ..>  WARR : <color:#65A637><size:8>live case\nstate</size></color>
+AUD_DB ..>  WARR : <color:#65A637><size:8>audit\nstream</size></color>
+EFF    ..>  WARR
+
+' --- Human Override → Orchestrator (async interrupt) ---
+HUMAN  ..>  ORCH : <color:#FF4444><b><size:9>halt_case()\nresume_case()\napprove_action()</size></b></color>
+HUMAN  ..>  WARR : <color:#FF4444><size:8>War Room\nUI</size></color>
+
+
+' ============================================================
+' NOTES / CALLOUTS
+' ============================================================
+
+note top of MCP_BOX
+  <b><color:#4488FF>Bidirectional MCP Transport</color></b>
+  JSON-RPC 2.0  over HTTPS :3000
+  Circuit breaker: 5 fails → OPEN (30s probe)
+  Retry: exponential backoff, max 3 attempts
+  Rate limit: global 100 rps  |  per-agent 20 rps
+  Cache: LRU 500 entries, tool-specific TTLs
+  Bearer token scoped per agent (executor ≠ vanguard)
+end note
+
+note bottom of EXEC
+  <b>Executor Safety Gates  (in order per action)</b>
+  1.  Rate limiter      10 actions / 3600s
+  2.  Cascade guard     halt if 3 failures / 300s
+  3.  HALT signal check  case.status == HALTED?
+  4.  Mode gate          action permitted at this tier?
+  5.  Distributed lock   response_locks KV Store
+  6.  Dedup window       300s same action+target+case
+  7.  Audit pre-write    INTENT record to HEC
+  8.  Execute            platform API call
+  9.  Verify (5s delay)  re-query Splunk to confirm
+  10. Schedule rollback  write to response_locks
+end note
+
+note right of HUMAN
+  <b><color:#FF4444>Human Override</color></b>
+  Available at any pipeline stage.
+  halt_case()      → immediate stop, HALTED state
+  resume_case()    → re-queue from previous state
+  approve_action() → unblock approval gate
+  Approval required when:
+    score < 90 + FULL_AUTONOMY mode
+    action: rotate_credentials (always)
+    action: unisolate_host (always)
+    action: restore_file (always)
+end note
+
+note top of ORCH
+  <b>State Machine</b>
+  QUEUED → TRIAGING → INVESTIGATING
+  → DECIDING → RESPONDING → LEARNING → CLOSED
+  + ERROR (retry ≤3×) | HALTED | SUPPRESSED
+  Priority: CRITICAL=4, HIGH=3, MED=2, LOW=1
+end note
+
+
+' ============================================================
+' LEGEND
+' ============================================================
+legend right
+  |= Symbol |= Meaning |
+  | <color:#888888>——→</color>  | Synchronous call / data flow |
+  | <color:#888888>- - →</color>  | Asynchronous / event-driven |
+  | <color:#888888>↔</color>  | Bidirectional request-response |
+  |<back:#65A637>   </back>| Splunk platform component |
+  |<back:#4488FF>   </back>| Investigation / AI data flow |
+  |<back:#FF4444>   </back>| Response action / human override |
+  |<back:#FFAA00>   </back>| Orchestration pipeline |
+  | | |
+  | Max concurrent cases | 5 |
+  | Max retries per case | 3 |
+  | Auto-respond threshold | score ≥ 90 |
+  | Rate limit | 10 actions / hr |
+  | Cascade guard | 3 failures / 5 min |
+  | Rollback sweep | every 5 min |
+  | SAIA fallback | built-in SPL templates |
+  | Foundation-Sec fallback | rule-based classifier |
+  | Cisco TS fallback | built-in _TimeSeries |
+endlegend
+
+@enduml

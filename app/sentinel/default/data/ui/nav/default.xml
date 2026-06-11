@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<nav search_view="search">
+  <view name="sentinel_war_room" default="true" label="War Room"/>
+  <view name="sentinel_performance" label="Performance"/>
+  <collection label="Details">
+    <view name="sentinel_case_details" label="Case Details"/>
+  </collection>
+</nav>

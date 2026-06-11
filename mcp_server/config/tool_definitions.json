@@ -1,0 +1,1025 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SENTINEL MCP Tool Registry",
+  "description": "Complete schema registry for all 14 SENTINEL MCP tools. Loaded by the MCP Server at startup and used for input validation, documentation generation, and agent capability negotiation.",
+  "version": "1.0.0",
+  "tools": [
+
+    {
+      "name": "search_spl",
+      "category": "investigation",
+      "description": "Execute an arbitrary SPL (Search Processing Language) query against one or more Splunk indexes. Results are returned as a JSON array of event objects. Use validate_spl first if the query was generated programmatically. Large result sets are automatically paginated.",
+      "agent": ["sherlock", "vanguard", "sage"],
+      "timeout_seconds": 120,
+      "inputSchema": {
+        "type": "object",
+        "required": ["spl"],
+        "properties": {
+          "spl": {
+            "type": "string",
+            "description": "The SPL query to execute. Must not contain | sendemail, | outputcsv writing outside approved paths, or REST calls to credential endpoints.",
+            "minLength": 5,
+            "maxLength": 8192
+          },
+          "earliest": {
+            "type": "string",
+            "description": "Search time window start. Accepts Splunk relative time strings (-15m, -24h, -7d) or epoch integers.",
+            "default": "-24h"
+          },
+          "latest": {
+            "type": "string",
+            "description": "Search time window end. Defaults to 'now'.",
+            "default": "now"
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Maximum number of results to return. Hard cap is 10,000.",
+            "default": 1000,
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Per-query timeout in seconds. Overrides server default.",
+            "default": 120,
+            "minimum": 5,
+            "maximum": 600
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "If true, return partial results before the search completes (streaming mode).",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": { "type": "object" },
+            "description": "Array of event objects matching the search."
+          },
+          "result_count": { "type": "integer" },
+          "total_count": { "type": "integer", "description": "Total matching events before max_results truncation." },
+          "job_id": { "type": "string" },
+          "execution_time_ms": { "type": "integer" },
+          "truncated": { "type": "boolean" }
+        }
+      },
+      "example": {
+        "input": {
+          "spl": "index=endpoint host=DESKTOP-ABC123 process_name=powershell.exe | stats count by user, process_args | sort -count",
+          "earliest": "-2h",
+          "max_results": 100
+        },
+        "output": {
+          "results": [
+            { "user": "jdoe", "process_args": "-enc UABvAHcAZQByAFMAaABlAGwAbAA=", "count": "3" }
+          ],
+          "result_count": 1,
+          "total_count": 1,
+          "job_id": "scheduler__admin_sentinel__search1_at_1748000000.0",
+          "execution_time_ms": 847,
+          "truncated": false
+        }
+      }
+    },
+
+    {
+      "name": "get_indexes",
+      "category": "investigation",
+      "description": "List all Splunk indexes accessible to the sentinel_service account, with event count and time range metadata. Use this to discover which data sources are available before crafting SPL queries.",
+      "agent": ["sherlock", "vanguard", "sage"],
+      "timeout_seconds": 10,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Optional substring filter applied to index names.",
+            "default": ""
+          },
+          "include_internal": {
+            "type": "boolean",
+            "description": "Include Splunk internal indexes (_internal, _audit, etc.).",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "indexes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "event_count": { "type": "integer" },
+                "earliest_event": { "type": "string" },
+                "latest_event": { "type": "string" },
+                "size_mb": { "type": "number" },
+                "sourcetypes": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "total_count": { "type": "integer" }
+        }
+      },
+      "example": {
+        "input": { "filter": "endpoint", "include_internal": false },
+        "output": {
+          "indexes": [
+            {
+              "name": "endpoint",
+              "event_count": 48293847,
+              "earliest_event": "2025-01-01T00:00:00Z",
+              "latest_event": "2026-06-05T12:34:00Z",
+              "size_mb": 12480,
+              "sourcetypes": ["WinEventLog:Security", "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational", "crowdstrike:events:sensor"]
+            }
+          ],
+          "total_count": 1
+        }
+      }
+    },
+
+    {
+      "name": "run_saved_search",
+      "category": "investigation",
+      "description": "Execute a pre-defined saved search or correlation search by name. Safer than ad-hoc SPL for high-frequency operations because the SPL is version-controlled and pre-validated. Supports parameter injection for parametrized searches.",
+      "agent": ["sherlock", "vanguard", "sage"],
+      "timeout_seconds": 300,
+      "inputSchema": {
+        "type": "object",
+        "required": ["search_name"],
+        "properties": {
+          "search_name": {
+            "type": "string",
+            "description": "Exact name of the saved search as defined in savedsearches.conf.",
+            "maxLength": 256
+          },
+          "params": {
+            "type": "object",
+            "description": "Key-value pairs injected as tokens into the search (e.g., {\"host\": \"DESKTOP-ABC123\"} replaces $host$ in the SPL).",
+            "additionalProperties": { "type": "string" }
+          },
+          "earliest": { "type": "string", "default": "" },
+          "latest": { "type": "string", "default": "" }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "results": { "type": "array", "items": { "type": "object" } },
+          "result_count": { "type": "integer" },
+          "search_name": { "type": "string" },
+          "job_id": { "type": "string" },
+          "execution_time_ms": { "type": "integer" }
+        }
+      },
+      "example": {
+        "input": {
+          "search_name": "SENTINEL - Metrics - Agent Performance Dashboard Feed",
+          "params": {},
+          "earliest": "-1h"
+        },
+        "output": {
+          "results": [
+            { "agent_name": "vanguard", "decisions": "12", "avg_confidence": "0.87", "avg_latency_ms": "2340", "success_rate": "100.0" }
+          ],
+          "result_count": 4,
+          "search_name": "SENTINEL - Metrics - Agent Performance Dashboard Feed",
+          "job_id": "1748000060.45",
+          "execution_time_ms": 1203
+        }
+      }
+    },
+
+    {
+      "name": "validate_spl",
+      "category": "investigation",
+      "description": "Check SPL syntax and semantic correctness before execution. Returns parsed structure, detected issues, and a performance estimate. Use before executing SAIA-generated SPL to catch hallucinations or syntax errors.",
+      "agent": ["sherlock", "sage"],
+      "timeout_seconds": 10,
+      "inputSchema": {
+        "type": "object",
+        "required": ["spl"],
+        "properties": {
+          "spl": {
+            "type": "string",
+            "description": "The SPL string to validate. Does not execute the search.",
+            "maxLength": 8192
+          },
+          "check_indexes": {
+            "type": "boolean",
+            "description": "Verify that all indexes referenced in the SPL actually exist.",
+            "default": true
+          },
+          "estimate_cost": {
+            "type": "boolean",
+            "description": "Return a rough performance estimate based on index size and search commands.",
+            "default": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "valid": { "type": "boolean" },
+          "errors": { "type": "array", "items": { "type": "string" } },
+          "warnings": { "type": "array", "items": { "type": "string" } },
+          "parsed_commands": { "type": "array", "items": { "type": "string" } },
+          "referenced_indexes": { "type": "array", "items": { "type": "string" } },
+          "missing_indexes": { "type": "array", "items": { "type": "string" } },
+          "estimated_scan_events": { "type": "integer" },
+          "estimated_duration_seconds": { "type": "number" }
+        }
+      },
+      "example": {
+        "input": {
+          "spl": "index=endpoint host=DESKTOP-ABC123 | timechart count by sourcetype",
+          "check_indexes": true,
+          "estimate_cost": true
+        },
+        "output": {
+          "valid": true,
+          "errors": [],
+          "warnings": ["Missing earliest/latest constraints may scan large time ranges"],
+          "parsed_commands": ["search", "timechart"],
+          "referenced_indexes": ["endpoint"],
+          "missing_indexes": [],
+          "estimated_scan_events": 1240000,
+          "estimated_duration_seconds": 4.2
+        }
+      }
+    },
+
+    {
+      "name": "get_knowledge_objects",
+      "category": "investigation",
+      "description": "Retrieve Splunk knowledge objects relevant to an investigation: CIM data model field mappings, field extractions, event types, and tags. Use to understand what fields are available on a given sourcetype before writing SPL.",
+      "agent": ["sherlock", "sage"],
+      "timeout_seconds": 15,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "object_type": {
+            "type": "string",
+            "description": "Type of knowledge object to retrieve.",
+            "enum": ["datamodel", "field_extraction", "event_type", "tag", "macro", "all"],
+            "default": "all"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Substring filter applied to object names.",
+            "default": ""
+          },
+          "sourcetype": {
+            "type": "string",
+            "description": "Filter field extractions and event types to those applicable to a specific sourcetype."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "datamodels": { "type": "array", "items": { "type": "object" } },
+          "field_extractions": { "type": "array", "items": { "type": "object" } },
+          "event_types": { "type": "array", "items": { "type": "object" } },
+          "tags": { "type": "array", "items": { "type": "object" } },
+          "macros": { "type": "array", "items": { "type": "object" } }
+        }
+      },
+      "example": {
+        "input": { "object_type": "datamodel", "filter": "Endpoint" },
+        "output": {
+          "datamodels": [
+            {
+              "name": "Endpoint",
+              "fields": ["dest", "user", "process", "process_name", "process_hash", "parent_process", "parent_process_name"],
+              "cim_version": "4.20"
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "query_es_notable",
+      "category": "investigation",
+      "description": "Query Splunk Enterprise Security notable events. Returns structured notable event data including risk scores, contributing events, and analyst comments. Supports filtering by host, user, time range, and severity.",
+      "agent": ["vanguard", "sherlock"],
+      "timeout_seconds": 30,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "notable_id": {
+            "type": "string",
+            "description": "Specific notable event ID to retrieve (from event_id field in notable index)."
+          },
+          "host": {
+            "type": "string",
+            "description": "Filter notables by affected host (exact match or wildcard)."
+          },
+          "user": {
+            "type": "string",
+            "description": "Filter notables by associated user."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "low", "medium", "high", "critical"],
+            "description": "Minimum severity threshold."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["new", "in_progress", "pending", "resolved", "closed"],
+            "description": "Filter by notable status."
+          },
+          "earliest": { "type": "string", "default": "-24h" },
+          "latest": { "type": "string", "default": "now" },
+          "max_results": { "type": "integer", "default": 50, "maximum": 500 }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "notables": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "event_id": { "type": "string" },
+                "rule_name": { "type": "string" },
+                "severity": { "type": "string" },
+                "host": { "type": "string" },
+                "user": { "type": "string" },
+                "risk_score": { "type": "integer" },
+                "status": { "type": "string" },
+                "owner": { "type": "string" },
+                "time": { "type": "string" },
+                "contributing_events": { "type": "integer" },
+                "annotations": { "type": "object" }
+              }
+            }
+          },
+          "total_count": { "type": "integer" }
+        }
+      },
+      "example": {
+        "input": { "host": "DESKTOP-ABC123", "severity": "high", "earliest": "-4h" },
+        "output": {
+          "notables": [
+            {
+              "event_id": "NOT-001-20260605",
+              "rule_name": "SENTINEL - Ransomware - PowerShell Encoded Command - Rule",
+              "severity": "high",
+              "host": "DESKTOP-ABC123",
+              "user": "jdoe",
+              "risk_score": 75,
+              "status": "new",
+              "owner": "unassigned",
+              "time": "2026-06-05T02:47:00Z",
+              "contributing_events": 3,
+              "annotations": { "mitre_attack": ["T1059.001"] }
+            }
+          ],
+          "total_count": 1
+        }
+      }
+    },
+
+    {
+      "name": "get_asset_context",
+      "category": "investigation",
+      "description": "Retrieve full asset context for a host from the CMDB-derived asset_criticality lookup and ES Asset inventory. Returns criticality score, owner, environment, business unit, installed software summary, and open vulnerability count.",
+      "agent": ["vanguard", "sherlock"],
+      "timeout_seconds": 15,
+      "inputSchema": {
+        "type": "object",
+        "required": ["asset_identifier"],
+        "properties": {
+          "asset_identifier": {
+            "type": "string",
+            "description": "Hostname, IP address, or asset ID to look up."
+          },
+          "identifier_type": {
+            "type": "string",
+            "enum": ["hostname", "ip", "asset_id", "auto"],
+            "default": "auto",
+            "description": "Type of the identifier. Use 'auto' to let the server detect."
+          },
+          "include_vulnerabilities": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include open vulnerability count and CVSS score summary from the vuln index."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "asset_id": { "type": "string" },
+          "hostname": { "type": "string" },
+          "ip_addresses": { "type": "array", "items": { "type": "string" } },
+          "operating_system": { "type": "string" },
+          "criticality_score": { "type": "number" },
+          "criticality_label": { "type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"] },
+          "owner": { "type": "string" },
+          "environment": { "type": "string", "enum": ["production", "staging", "development", "dmz"] },
+          "business_unit": { "type": "string" },
+          "location": { "type": "string" },
+          "last_seen": { "type": "string" },
+          "open_vulnerabilities": { "type": "integer" },
+          "max_cvss": { "type": "number" }
+        }
+      },
+      "example": {
+        "input": { "asset_identifier": "DESKTOP-ABC123", "include_vulnerabilities": true },
+        "output": {
+          "asset_id": "ASSET-00842",
+          "hostname": "DESKTOP-ABC123",
+          "ip_addresses": ["10.0.1.42"],
+          "operating_system": "Windows 11 Pro 23H2",
+          "criticality_score": 1.2,
+          "criticality_label": "HIGH",
+          "owner": "jdoe",
+          "environment": "production",
+          "business_unit": "Finance",
+          "location": "New York, NY",
+          "last_seen": "2026-06-05T02:47:00Z",
+          "open_vulnerabilities": 14,
+          "max_cvss": 7.8
+        }
+      }
+    },
+
+    {
+      "name": "get_process_tree",
+      "category": "investigation",
+      "description": "Reconstruct the full process ancestry and child tree for a given process or host from EDR telemetry. Returns a hierarchical JSON tree with command lines, hashes, network connections, and file modifications for each node.",
+      "agent": ["sherlock"],
+      "timeout_seconds": 60,
+      "inputSchema": {
+        "type": "object",
+        "required": ["host"],
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "Hostname from which to retrieve process tree data."
+          },
+          "process_id": {
+            "type": "integer",
+            "description": "Specific PID to anchor the tree to. If omitted, returns all process trees for the host in the time window."
+          },
+          "process_name": {
+            "type": "string",
+            "description": "Filter tree to branches containing this process name."
+          },
+          "earliest": { "type": "string", "default": "-2h" },
+          "latest": { "type": "string", "default": "now" },
+          "include_network": {
+            "type": "boolean",
+            "default": true,
+            "description": "Attach network connections to each process node."
+          },
+          "include_files": {
+            "type": "boolean",
+            "default": true,
+            "description": "Attach file create/modify/delete events to each process node."
+          },
+          "depth": {
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Maximum depth of the process tree to return."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "host": { "type": "string" },
+          "tree": {
+            "type": "array",
+            "description": "Array of root process nodes. Each node may contain a 'children' array.",
+            "items": { "$ref": "#/definitions/process_node" }
+          },
+          "total_processes": { "type": "integer" },
+          "suspicious_indicators": { "type": "array", "items": { "type": "string" } }
+        },
+        "definitions": {
+          "process_node": {
+            "type": "object",
+            "properties": {
+              "pid": { "type": "integer" },
+              "process_name": { "type": "string" },
+              "process_path": { "type": "string" },
+              "command_line": { "type": "string" },
+              "process_hash_md5": { "type": "string" },
+              "process_hash_sha256": { "type": "string" },
+              "user": { "type": "string" },
+              "start_time": { "type": "string" },
+              "network_connections": { "type": "array", "items": { "type": "object" } },
+              "file_events": { "type": "array", "items": { "type": "object" } },
+              "children": { "type": "array" }
+            }
+          }
+        }
+      },
+      "example": {
+        "input": { "host": "DESKTOP-ABC123", "process_name": "powershell.exe", "earliest": "-2h" },
+        "output": {
+          "host": "DESKTOP-ABC123",
+          "tree": [
+            {
+              "pid": 4892,
+              "process_name": "cmd.exe",
+              "command_line": "C:\\Windows\\system32\\cmd.exe",
+              "user": "jdoe",
+              "start_time": "2026-06-05T02:43:12Z",
+              "children": [
+                {
+                  "pid": 5120,
+                  "process_name": "powershell.exe",
+                  "command_line": "powershell.exe -enc UABvAHcAZQByAFMAaABlAGwAbAA=",
+                  "process_hash_sha256": "a3f8d2c1...",
+                  "network_connections": [
+                    { "dest_ip": "185.220.101.42", "dest_port": 443, "bytes_out": 284829 }
+                  ],
+                  "file_events": [
+                    { "action": "write", "path": "C:\\Windows\\Temp\\svchost32.exe" }
+                  ],
+                  "children": []
+                }
+              ]
+            }
+          ],
+          "total_processes": 2,
+          "suspicious_indicators": ["encoded_command_argument", "network_connection_from_powershell", "executable_dropped_in_temp"]
+        }
+      }
+    },
+
+    {
+      "name": "get_network_flows",
+      "category": "investigation",
+      "description": "Retrieve NetFlow, Zeek, or firewall session records for a host or IP address. Supports filtering by direction, port, protocol, and byte threshold. Automatically enriches destination IPs with GeoIP data.",
+      "agent": ["sherlock"],
+      "timeout_seconds": 60,
+      "inputSchema": {
+        "type": "object",
+        "required": ["host"],
+        "properties": {
+          "host": { "type": "string", "description": "Source or destination host/IP to query." },
+          "direction": {
+            "type": "string",
+            "enum": ["inbound", "outbound", "both"],
+            "default": "both"
+          },
+          "dest_port": { "type": "integer", "description": "Filter by destination port." },
+          "protocol": { "type": "string", "enum": ["tcp", "udp", "icmp", "any"], "default": "any" },
+          "min_bytes": { "type": "integer", "description": "Only return flows with total bytes >= this value.", "default": 0 },
+          "exclude_internal": { "type": "boolean", "default": false, "description": "Exclude RFC 1918 destination addresses." },
+          "earliest": { "type": "string", "default": "-2h" },
+          "latest": { "type": "string", "default": "now" },
+          "max_results": { "type": "integer", "default": 500 }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "flows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "src_ip": { "type": "string" },
+                "dest_ip": { "type": "string" },
+                "dest_port": { "type": "integer" },
+                "protocol": { "type": "string" },
+                "bytes_in": { "type": "integer" },
+                "bytes_out": { "type": "integer" },
+                "duration_seconds": { "type": "number" },
+                "start_time": { "type": "string" },
+                "geo_country": { "type": "string" },
+                "geo_city": { "type": "string" },
+                "action": { "type": "string", "enum": ["allowed", "blocked", "reset"] }
+              }
+            }
+          },
+          "total_bytes_out": { "type": "integer" },
+          "unique_destinations": { "type": "integer" },
+          "blocked_count": { "type": "integer" }
+        }
+      },
+      "example": {
+        "input": { "host": "DESKTOP-ABC123", "direction": "outbound", "exclude_internal": true, "earliest": "-2h" },
+        "output": {
+          "flows": [
+            {
+              "src_ip": "10.0.1.42",
+              "dest_ip": "185.220.101.42",
+              "dest_port": 443,
+              "protocol": "tcp",
+              "bytes_out": 284829,
+              "bytes_in": 1024,
+              "duration_seconds": 12.4,
+              "start_time": "2026-06-05T02:44:01Z",
+              "geo_country": "DE",
+              "geo_city": "Frankfurt",
+              "action": "allowed"
+            }
+          ],
+          "total_bytes_out": 284829,
+          "unique_destinations": 1,
+          "blocked_count": 0
+        }
+      }
+    },
+
+    {
+      "name": "get_user_activity",
+      "category": "investigation",
+      "description": "Retrieve a chronological UEBA (User and Entity Behavior Analytics) timeline for a user. Includes authentication events, privileged operations, data access, and anomaly scores from the Splunk UBA or ES User Intelligence framework.",
+      "agent": ["sherlock", "vanguard"],
+      "timeout_seconds": 60,
+      "inputSchema": {
+        "type": "object",
+        "required": ["user"],
+        "properties": {
+          "user": { "type": "string", "description": "Username (SAMAccountName, UPN, or email) to retrieve activity for." },
+          "earliest": { "type": "string", "default": "-24h" },
+          "latest": { "type": "string", "default": "now" },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["authentication", "privilege_escalation", "data_access", "admin_action", "network", "anomaly", "all"]
+            },
+            "default": ["all"]
+          },
+          "include_baseline": {
+            "type": "boolean",
+            "default": true,
+            "description": "Include the user's behavioral baseline for comparison (typical login hours, locations, access patterns)."
+          },
+          "max_events": { "type": "integer", "default": 200, "maximum": 1000 }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "user": { "type": "string" },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "time": { "type": "string" },
+                "event_type": { "type": "string" },
+                "action": { "type": "string" },
+                "src": { "type": "string" },
+                "dest": { "type": "string" },
+                "result": { "type": "string" },
+                "anomaly_score": { "type": "number" },
+                "risk_score": { "type": "number" }
+              }
+            }
+          },
+          "baseline": {
+            "type": "object",
+            "properties": {
+              "typical_login_hours": { "type": "string" },
+              "typical_src_ips": { "type": "array", "items": { "type": "string" } },
+              "typical_locations": { "type": "array", "items": { "type": "string" } },
+              "avg_daily_events": { "type": "number" }
+            }
+          },
+          "impossible_travel_detected": { "type": "boolean" },
+          "risk_score_current": { "type": "number" }
+        }
+      },
+      "example": {
+        "input": { "user": "jdoe", "earliest": "-4h", "include_baseline": true },
+        "output": {
+          "user": "jdoe",
+          "events": [
+            {
+              "time": "2026-06-05T02:43:00Z",
+              "event_type": "authentication",
+              "action": "vpn_login",
+              "src": "45.33.32.156",
+              "result": "success",
+              "anomaly_score": 0.97,
+              "risk_score": 87
+            }
+          ],
+          "baseline": {
+            "typical_login_hours": "08:00-18:00 EST",
+            "typical_src_ips": ["71.198.x.x"],
+            "typical_locations": ["New York, US"],
+            "avg_daily_events": 142
+          },
+          "impossible_travel_detected": true,
+          "risk_score_current": 87
+        }
+      }
+    },
+
+    {
+      "name": "execute_response_action",
+      "category": "response",
+      "description": "Execute a containment or remediation action via the connected EDR, Identity, Firewall, or Cloud APIs. All actions are logged to the sentinel_audit index, acquire a distributed lock to prevent duplicate execution, and support automatic rollback via a timer. Requires Executor agent identity; will be rejected if called by investigation-only agents.",
+      "agent": ["executor"],
+      "timeout_seconds": 30,
+      "inputSchema": {
+        "type": "object",
+        "required": ["action_type", "target", "case_id"],
+        "properties": {
+          "action_type": {
+            "type": "string",
+            "enum": ["isolate_host", "unisolate_host", "disable_user", "enable_user", "block_ip", "unblock_ip", "quarantine_file", "restore_file", "kill_process", "revoke_session", "rotate_credentials", "remediate_s3_policy"],
+            "description": "The containment or remediation action to execute."
+          },
+          "target": {
+            "type": "string",
+            "description": "The resource to act upon: hostname, IP address, username, file path, or process ID depending on action_type."
+          },
+          "case_id": {
+            "type": "string",
+            "description": "SENTINEL case ID this action is attributed to. Required for audit trail."
+          },
+          "platform": {
+            "type": "string",
+            "enum": ["crowdstrike", "defender", "sentinelone", "azuread", "okta", "panos", "cisco_fmc", "aws", "auto"],
+            "default": "auto",
+            "description": "Target platform. 'auto' selects based on asset type from asset_context lookup."
+          },
+          "rollback_after_hours": {
+            "type": "number",
+            "description": "Automatically reverse this action after N hours. 0 = permanent (requires explicit confirmation).",
+            "default": 4,
+            "minimum": 0,
+            "maximum": 168
+          },
+          "rollback_requires_approval": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, rollback requires analyst approval in addition to the timer."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Simulate the action without executing it. Returns what would happen."
+          },
+          "justification": {
+            "type": "string",
+            "description": "Human-readable reason for taking this action. Written to the audit log.",
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "action_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["SUCCESS", "FAILURE", "PENDING", "DRY_RUN"] },
+          "platform_response": { "type": "object" },
+          "executed_at": { "type": "string" },
+          "rollback_scheduled_at": { "type": "string" },
+          "audit_event_id": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      },
+      "example": {
+        "input": {
+          "action_type": "isolate_host",
+          "target": "DESKTOP-ABC123",
+          "case_id": "SEN-000001",
+          "platform": "crowdstrike",
+          "rollback_after_hours": 4,
+          "justification": "LockBit 3.0 confirmed on host. Isolating to prevent further lateral movement."
+        },
+        "output": {
+          "action_id": "ACT-0001-isolate",
+          "status": "SUCCESS",
+          "platform_response": { "device_id": "abc123def456", "containment_status": "contained" },
+          "executed_at": "2026-06-05T02:55:03Z",
+          "rollback_scheduled_at": "2026-06-05T06:55:03Z",
+          "audit_event_id": "AUD-20260605-0042"
+        }
+      }
+    },
+
+    {
+      "name": "create_ticket",
+      "category": "response",
+      "description": "Create an incident ticket in ServiceNow or Jira. Automatically populates the ticket with the SENTINEL case summary, attack chain narrative, actions taken, and relevant log evidence. Returns the ticket ID and URL.",
+      "agent": ["executor"],
+      "timeout_seconds": 20,
+      "inputSchema": {
+        "type": "object",
+        "required": ["case_id", "platform"],
+        "properties": {
+          "case_id": { "type": "string" },
+          "platform": { "type": "string", "enum": ["servicenow", "jira"], "default": "servicenow" },
+          "priority": { "type": "integer", "minimum": 1, "maximum": 5, "default": 2, "description": "1=Critical, 2=High, 3=Medium, 4=Low, 5=Planning" },
+          "assignment_group": { "type": "string", "description": "Team or group to assign the ticket to." },
+          "category": { "type": "string", "default": "Security Incident" },
+          "additional_notes": { "type": "string", "description": "Any additional context to append to the auto-generated ticket body.", "maxLength": 4096 }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ticket_id": { "type": "string" },
+          "ticket_url": { "type": "string" },
+          "platform": { "type": "string" },
+          "created_at": { "type": "string" },
+          "assigned_to": { "type": "string" }
+        }
+      },
+      "example": {
+        "input": { "case_id": "SEN-000001", "platform": "servicenow", "priority": 1, "assignment_group": "Security Operations" },
+        "output": {
+          "ticket_id": "INC-2026-8842",
+          "ticket_url": "https://yourcompany.service-now.com/incident?sys_id=abc123",
+          "platform": "servicenow",
+          "created_at": "2026-06-05T02:55:08Z",
+          "assigned_to": "Security Operations"
+        }
+      }
+    },
+
+    {
+      "name": "notify_stakeholders",
+      "category": "response",
+      "description": "Send an incident notification to one or more channels (Slack, PagerDuty, email). Pre-formats the message from the SENTINEL case context. Used by Executor for on-call paging and post-containment notifications.",
+      "agent": ["executor", "orchestrator"],
+      "timeout_seconds": 15,
+      "inputSchema": {
+        "type": "object",
+        "required": ["case_id", "channels"],
+        "properties": {
+          "case_id": { "type": "string" },
+          "channels": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["slack", "pagerduty", "email"] },
+            "minItems": 1
+          },
+          "message_type": {
+            "type": "string",
+            "enum": ["alert", "update", "resolved", "custom"],
+            "default": "alert"
+          },
+          "custom_message": {
+            "type": "string",
+            "description": "Used only when message_type=custom. Overrides the auto-generated message.",
+            "maxLength": 2048
+          },
+          "urgency": { "type": "string", "enum": ["low", "high", "critical"], "default": "high" },
+          "recipients": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Slack usernames, email addresses, or PagerDuty escalation policy IDs."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "notifications_sent": { "type": "array", "items": { "type": "object" } },
+          "failures": { "type": "array", "items": { "type": "object" } }
+        }
+      },
+      "example": {
+        "input": {
+          "case_id": "SEN-000001",
+          "channels": ["slack", "pagerduty"],
+          "message_type": "alert",
+          "urgency": "critical"
+        },
+        "output": {
+          "notifications_sent": [
+            { "channel": "slack", "target": "#soc-oncall", "ts": "1748000108.123456" },
+            { "channel": "pagerduty", "incident_key": "SEN-000001", "status": "triggered" }
+          ],
+          "failures": []
+        }
+      }
+    },
+
+    {
+      "name": "enrich_threat_intel",
+      "category": "enrichment",
+      "description": "Query multiple threat intelligence sources (VirusTotal, MISP, AbuseIPDB) for context on an IOC (IP, domain, file hash, or URL). Results are cached in the threat_intel_cache KV Store for 24 hours to avoid redundant API calls. Returns aggregated verdict, detection count, malware family associations, and raw source responses.",
+      "agent": ["vanguard", "sherlock", "sage"],
+      "timeout_seconds": 20,
+      "inputSchema": {
+        "type": "object",
+        "required": ["ioc_value", "ioc_type"],
+        "properties": {
+          "ioc_value": {
+            "type": "string",
+            "description": "The indicator of compromise to look up.",
+            "maxLength": 512
+          },
+          "ioc_type": {
+            "type": "string",
+            "enum": ["ip", "domain", "url", "md5", "sha1", "sha256"],
+            "description": "Type of the IOC. Determines which sources are queried."
+          },
+          "sources": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["virustotal", "misp", "abuseipdb", "all"] },
+            "default": ["all"],
+            "description": "Threat intel sources to query. Defaults to all configured sources."
+          },
+          "force_refresh": {
+            "type": "boolean",
+            "default": false,
+            "description": "Bypass the KV Store cache and force a fresh lookup from all sources."
+          },
+          "check_whitelist": {
+            "type": "boolean",
+            "default": true,
+            "description": "Check the ioc_whitelist lookup before querying external sources."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ioc_value": { "type": "string" },
+          "ioc_type": { "type": "string" },
+          "verdict": { "type": "string", "enum": ["malicious", "suspicious", "clean", "unknown", "whitelisted"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "malware_families": { "type": "array", "items": { "type": "string" } },
+          "virustotal": {
+            "type": "object",
+            "properties": {
+              "detections": { "type": "integer" },
+              "total_engines": { "type": "integer" },
+              "score": { "type": "number" },
+              "permalink": { "type": "string" }
+            }
+          },
+          "abuseipdb": {
+            "type": "object",
+            "properties": {
+              "abuse_confidence_score": { "type": "integer" },
+              "total_reports": { "type": "integer" },
+              "country_code": { "type": "string" },
+              "isp": { "type": "string" }
+            }
+          },
+          "misp": {
+            "type": "object",
+            "properties": {
+              "event_count": { "type": "integer" },
+              "tags": { "type": "array", "items": { "type": "string" } },
+              "event_ids": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "cached": { "type": "boolean" },
+          "cache_age_seconds": { "type": "integer" },
+          "is_whitelisted": { "type": "boolean" }
+        }
+      },
+      "example": {
+        "input": { "ioc_value": "185.220.101.42", "ioc_type": "ip", "sources": ["all"] },
+        "output": {
+          "ioc_value": "185.220.101.42",
+          "ioc_type": "ip",
+          "verdict": "malicious",
+          "confidence": 0.97,
+          "malware_families": ["LockBit 3.0", "Tor exit node"],
+          "virustotal": { "detections": 47, "total_engines": 70, "score": 0.97, "permalink": "https://www.virustotal.com/gui/ip-address/185.220.101.42" },
+          "abuseipdb": { "abuse_confidence_score": 100, "total_reports": 1842, "country_code": "DE", "isp": "Hetzner Online GmbH" },
+          "misp": { "event_count": 3, "tags": ["misp-galaxy:ransomware=\"LockBit 3.0\"", "tlp:white"], "event_ids": ["4821", "4903", "5012"] },
+          "cached": false,
+          "cache_age_seconds": 0,
+          "is_whitelisted": false
+        }
+      }
+    }
+
+  ]
+}

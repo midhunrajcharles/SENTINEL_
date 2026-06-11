@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dashboard version="1.1" theme="dark">
+  <label>SENTINEL Performance</label>
+  <description>Executive-facing rollup of SENTINEL's autonomous-SOC performance — throughput, resolution mix, MTTR, cost savings, detection efficacy, and agent uptime. Refreshes every 5 minutes; built for the weekly stakeholder readout.</description>
+
+  <!-- Hidden search that hydrates the Weekly Executive Report narrative tokens -->
+  <search id="weekly_report_stats">
+    <query>
+      index=sentinel_cases earliest=-7d@d latest=now
+      | stats count as total_cases,
+              sum(eval(if(status="CLOSED" AND (autonomous=1 OR autonomous="true" OR resolution!="HUMAN_DENIED"),1,0))) as autonomous_cases,
+              sum(eval((updated_time-created_time)/60)) as total_minutes,
+              count(eval(status="CLOSED")) as closed_cases
+      | eval autonomous_pct=round((autonomous_cases/total_cases)*100,0)
+      | eval mttr_min=round(total_minutes/closed_cases,1)
+      | eval cost_savings=round(autonomous_cases*1*85,0)
+      | eval cost_savings_fmt="$".tostring(cost_savings,"commas")
+      | table total_cases, autonomous_cases, autonomous_pct, mttr_min, cost_savings_fmt
+    </query>
+    <earliest>-7d@d</earliest>
+    <latest>now</latest>
+    <refresh>5m</refresh>
+    <refreshType>delay</refreshType>
+    <done>
+      <condition>
+        <set token="rpt_total">$result.total_cases$</set>
+        <set token="rpt_autonomous">$result.autonomous_cases$</set>
+        <set token="rpt_autonomous_pct">$result.autonomous_pct$</set>
+        <set token="rpt_mttr">$result.mttr_min$</set>
+        <set token="rpt_savings">$result.cost_savings_fmt$</set>
+      </condition>
+    </done>
+  </search>
+
+  <search id="ioc_weekly_count">
+    <query>
+      index=sentinel_audit event_type=enrichment earliest=-7d@d latest=now
+      | stats dc(ioc_value) as ioc_count
+    </query>
+    <earliest>-7d@d</earliest>
+    <latest>now</latest>
+    <refresh>5m</refresh>
+    <refreshType>delay</refreshType>
+    <done>
+      <condition>
+        <set token="rpt_iocs">$result.ioc_count$</set>
+      </condition>
+    </done>
+  </search>
+
+  <row>
+    <panel>
+      <title>📊 CASES PROCESSED (7D)</title>
+      <description>Daily volume of cases that entered the SENTINEL pipeline over the last week — the headline throughput metric for capacity planning.</description>
+      <chart>
+        <search>
+          <query>
+            index=sentinel_cases earliest=-7d@d latest=now
+            | bucket _time span=1d
+            | stats count by _time
+          </query>
+          <earliest>-7d@d</earliest>
+          <latest>now</latest>
+          <refresh>5m</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.fieldColors">{"count":#5DBDFF}</option>
+        <option name="charting.axisTitleY.text">Cases</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>🤖 AUTONOMOUS vs HUMAN-ESCALATED</title>
+      <description>Share of closed cases SENTINEL resolved end-to-end versus those that required a human decision. Gold slices are pure autonomy wins; gray slices are the cases SENTINEL correctly recognized it shouldn't handle alone.</description>
+      <chart>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED earliest=-7d@d latest=now
+            | eval resolution_type=if(status="CLOSED" AND (autonomous=1 OR autonomous="true"),"Autonomous","Human-Escalated")
+            | stats count by resolution_type
+          </query>
+          <earliest>-7d@d</earliest>
+          <latest>now</latest>
+          <refresh>5m</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="charting.chart">pie</option>
+        <option name="charting.fieldColors">{"Autonomous":#D4AF37,"Human-Escalated":#7e93b3}</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>⚡ AVERAGE MTTR</title>
+      <description>Mean-time-to-respond averaged daily over the trailing two weeks, with a 7-day trend indicator. Green under 15 minutes, yellow 15-30, red beyond 30 — the threshold at which SOC leadership should review autonomy tuning.</description>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED earliest=-14d@d latest=now
+            | eval mttr_min=round((updated_time-created_time)/60,2)
+            | timechart span=1d avg(mttr_min) as MTTR
+          </query>
+          <earliest>-14d@d</earliest>
+          <latest>now</latest>
+          <refresh>5m</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trendInterval">-7d</option>
+        <option name="trendDisplayMode">percent</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">block</option>
+        <option name="rangeValues">[15,30]</option>
+        <option name="colorBy">value</option>
+        <option name="unit">min</option>
+        <option name="unitPosition">after</option>
+        <option name="numberPrecision">0.0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>📊 COST SAVINGS</title>
+      <description>Estimated analyst-hours saved by autonomous resolution this week, valued at an $85/hour fully-loaded analyst rate, with a trend versus the prior week. The number that justifies the program to the CFO.</description>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED earliest=-14d@d latest=now
+            | eval is_autonomous=if(autonomous=1 OR autonomous="true",1,0)
+            | bucket _time span=7d
+            | stats sum(is_autonomous) as autonomous_cases by _time
+            | eval analyst_hours_saved=autonomous_cases*1
+            | eval cost_savings=analyst_hours_saved*85
+            | sort -_time
+            | head 1
+            | fields cost_savings
+          </query>
+          <earliest>-14d@d</earliest>
+          <latest>now</latest>
+          <refresh>5m</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trendInterval">-7d</option>
+        <option name="trendDisplayMode">percent</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">none</option>
+        <option name="unit">$</option>
+        <option name="unitPosition">before</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>📊 DETECTION EFFICACY</title>
+      <description>30-day trend of true-positive rate, false-positive rate, and overall agent decision accuracy (mean confidence across all logged decisions). The three lines that prove the model is improving — not just running.</description>
+      <chart>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED earliest=-30d@d latest=now
+            | bucket _time span=1d
+            | stats count as total, sum(eval(resolution="FALSE_POSITIVE")) as fp_count, sum(eval(resolution!="FALSE_POSITIVE")) as tp_count by _time
+            | eval true_positive_rate=round((tp_count/total)*100,1)
+            | eval false_positive_rate=round((fp_count/total)*100,1)
+            | appendcols [ search index=sentinel_audit event_type=decision earliest=-30d@d latest=now | bucket _time span=1d | stats avg(confidence_pct) as agent_accuracy by _time | fields agent_accuracy ]
+            | eval agent_accuracy=round(agent_accuracy,1)
+            | table _time, true_positive_rate, false_positive_rate, agent_accuracy
+          </query>
+          <earliest>-30d@d</earliest>
+          <latest>now</latest>
+          <refresh>5m</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.fieldColors">{"true_positive_rate":#65A637,"false_positive_rate":#DC4E41,"agent_accuracy":#5DBDFF}</option>
+        <option name="charting.axisTitleY.text">Percent</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>🤖 THREAT INTEL HARVESTED</title>
+      <description>Count of distinct indicators of compromise (IoCs) Sherlock extracted and enriched over the last 7 days, with a trend indicator versus the prior week — SENTINEL's contribution back to the broader threat-intel program.</description>
+      <single>
+        <search>
+          <query>
+            index=sentinel_audit event_type=enrichment earliest=-14d@d latest=now
+            | bucket _time span=1d
+            | stats dc(ioc_value) as new_iocs by _time
+          </query>
+          <earliest>-14d@d</earliest>
+          <latest>now</latest>
+          <refresh>5m</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trendInterval">-7d</option>
+        <option name="trendDisplayMode">percent</option>
+        <option name="useColors">false</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>⚡ AGENT UPTIME (24H)</title>
+      <description>Hourly online-percentage for each of the four agents over the last 24 hours, derived from sentinel_audit activity heartbeats — a quick visual for spotting any agent that's gone quiet.</description>
+      <chart>
+        <search>
+          <query>
+            index=sentinel_audit earliest=-24h latest=now agent_name=*
+            | bucket _time span=1h
+            | stats count as activity by _time, agent_name
+            | eval uptime_pct=if(activity>0,100,0)
+            | timechart span=1h max(uptime_pct) as uptime by agent_name
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>5m</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.stackMode">default</option>
+        <option name="charting.chart.nullValueMode">zero</option>
+        <option name="charting.axisTitleY.text">Uptime %</option>
+        <option name="charting.axisY.maximumNumber">100</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>📊 WEEKLY EXECUTIVE REPORT</title>
+      <description>Auto-generated narrative summary of the week's autonomous-SOC performance — the exact paragraph a SOC manager would paste into a stakeholder update, computed live from sentinel_cases and sentinel_audit.</description>
+      <html>
+        <div style="padding:1.1rem 1.4rem;background:#0c1320;border:1px solid #1f2a3d;border-radius:8px;font-family:'Splunk Platform Sans',sans-serif;font-size:0.92rem;line-height:1.7;color:#cfe3ff;">
+          SENTINEL processed <strong style="color:#9fc4ff;">$rpt_total$</strong> cases this week.
+          <strong style="color:#D4AF37;">$rpt_autonomous$</strong> were resolved fully autonomously
+          (<strong style="color:#D4AF37;">$rpt_autonomous_pct$%</strong>).
+          Mean time to respond: <strong style="color:#65A637;">$rpt_mttr$ min</strong>.
+          Estimated cost savings: <strong style="color:#65A637;">$rpt_savings$</strong>.
+          Sherlock harvested <strong style="color:#A875FF;">$rpt_iocs$</strong> new indicators of compromise
+          for the broader threat-intel program.
+        </div>
+      </html>
+    </panel>
+  </row>
+</dashboard>
