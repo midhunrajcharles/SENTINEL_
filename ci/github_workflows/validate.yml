@@ -1,0 +1,532 @@
+# =============================================================================
+# SENTINEL: Autonomous Agentic SOC Commander
+# ci/github_workflows/validate.yml — Primary CI validation workflow
+#
+# Copy or symlink this file to .github/workflows/validate.yml to activate it.
+#
+# Jobs (run in order unless otherwise noted):
+#   lint          — ruff + bandit security scan (fast, no deps)
+#   unit-tests    — pytest unit suite with coverage gate (needs: lint)
+#   appinspect    — Splunk App Inspect packaging validation (needs: unit-tests)
+#   integration   — Full pipeline smoke test against mock Splunk (needs: unit-tests, manual trigger only)
+# =============================================================================
+
+name: Validate SENTINEL App
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "release/**"
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+      - master
+      - "release/**"
+  # Allow manual dispatch with optional integration-test toggle
+  workflow_dispatch:
+    inputs:
+      run_integration:
+        description: "Run integration tests (requires mock-splunk service)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+# Cancel in-progress runs for the same branch/PR on new push
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.9"
+  APP_DIR: "app/sentinel"
+  REPORTS_DIR: "ci/reports"
+
+# ---------------------------------------------------------------------------
+# Job 1: lint
+# Fast static analysis — runs first because it's cheap and catches issues
+# before any test infrastructure is set up.
+# ---------------------------------------------------------------------------
+jobs:
+  lint:
+    name: Lint & Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install ruff bandit
+
+      - name: ruff — lint agent source
+        run: |
+          ruff check \
+            app/sentinel/bin/ \
+            tests/ \
+            --select E,W,F,B,S \
+            --ignore E501,S101,S603,S607 \
+            --output-format github
+
+      - name: ruff — format check
+        run: |
+          ruff format \
+            app/sentinel/bin/ \
+            tests/ \
+            --check --diff
+
+      - name: bandit — security scan of agent source
+        run: |
+          bandit \
+            --recursive app/sentinel/bin/ \
+            --severity-level medium \
+            --confidence-level medium \
+            --skip B101,B603,B607 \
+            --format json \
+            --output ci/reports/bandit_report.json \
+            || true   # bandit exits non-zero on findings; we parse findings below
+
+      - name: Create reports directory
+        run: mkdir -p ci/reports
+
+      - name: Parse bandit report
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          path = "ci/reports/bandit_report.json"
+          if not os.path.exists(path):
+              sys.exit(0)
+          with open(path) as f:
+              data = json.load(f)
+          metrics = data.get("metrics", {}).get("_totals", {})
+          high    = metrics.get("SEVERITY.HIGH", 0) + metrics.get("CONFIDENCE.HIGH", 0)
+          issues  = data.get("results", [])
+          for issue in issues:
+              sev  = issue.get("issue_severity", "LOW")
+              conf = issue.get("issue_confidence", "LOW")
+              fname= issue.get("filename", "?")
+              line = issue.get("line_number", 0)
+              text = issue.get("issue_text", "")
+              test = issue.get("test_id", "")
+              level = "error" if sev == "HIGH" else "warning"
+              print(f"::{level} file={fname},line={line}::[bandit:{test}][{sev}/{conf}] {text}")
+          if high > 0:
+              print(f"::error::bandit found {high} HIGH severity/confidence security issues.")
+              sys.exit(1)
+          PYEOF
+
+      - name: Upload bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-security-report
+          path: ci/reports/bandit_report.json
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Job 2: unit-tests
+  # Runs the full pytest unit suite. Integration tests are excluded via the
+  # SENTINEL_RUN_INTEGRATION env var (conftest.py reads it and skips tests
+  # marked @pytest.mark.integration when it is not "1").
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test on minimum supported version and latest stable
+        python-version: ["3.9", "3.11"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # Install app runtime dependencies
+          if [ -s app/sentinel/lib/requirements.txt ]; then
+            pip install -r app/sentinel/lib/requirements.txt
+          fi
+          # Install test dependencies
+          pip install \
+            pytest \
+            pytest-cov \
+            pytest-mock \
+            pytest-timeout \
+            requests \
+            urllib3
+
+      - name: Create CI reports directory
+        run: mkdir -p ci/reports
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit \
+            -c ci/pytest.ini \
+            --tb=short \
+            --junit-xml=ci/reports/junit-${{ matrix.python-version }}.xml \
+            --cov=app/sentinel/bin \
+            --cov-report=xml:ci/reports/coverage-${{ matrix.python-version }}.xml \
+            --cov-report=term-missing:skip-covered \
+            --cov-fail-under=80 \
+            -m "not integration and not slow and not demo"
+        env:
+          SENTINEL_RUN_INTEGRATION: "0"
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-py${{ matrix.python-version }}
+          path: |
+            ci/reports/junit-${{ matrix.python-version }}.xml
+            ci/reports/coverage-${{ matrix.python-version }}.xml
+          retention-days: 30
+
+      # Publish test results as a PR check annotation (only for PRs)
+      - name: Publish unit test results
+        if: always() && github.event_name == 'pull_request'
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: ci/reports/junit-${{ matrix.python-version }}.xml
+          check_name: "Unit Tests (Python ${{ matrix.python-version }})"
+          comment_mode: always
+          fail_on: test failures
+
+  # ---------------------------------------------------------------------------
+  # Job 3: appinspect
+  # Packages the Splunk app and validates it with the App Inspect CLI.
+  # Only runs when app source changes (path filter) and after tests pass.
+  # ---------------------------------------------------------------------------
+  appinspect:
+    name: Splunk App Inspect
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: unit-tests
+    # Only inspect when app source or packaging config changes
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      contains(join(github.event.commits.*.modified, ' '), 'app/sentinel/') ||
+      contains(join(github.event.commits.*.added, ' '), 'app/sentinel/') ||
+      github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Splunk App Inspect CLI
+        run: |
+          pip install --upgrade pip splunk-appinspect
+          splunk-appinspect --version
+
+      - name: Create CI reports directory
+        run: mkdir -p ci/reports
+
+      - name: Package app (exclude local overrides and dev files)
+        run: |
+          tar \
+            --exclude="app/sentinel/local" \
+            --exclude="app/sentinel/metadata/local.meta" \
+            --exclude="**/__pycache__" \
+            --exclude="**/*.pyc" \
+            --exclude="**/*.pyo" \
+            --exclude="**/.DS_Store" \
+            --exclude="**/.gitkeep" \
+            -czf ci/reports/sentinel.tar.gz \
+            -C app \
+            sentinel
+          echo "Package: $(du -sh ci/reports/sentinel.tar.gz)"
+
+      - name: Run App Inspect — splunk_appinspect tag (mandatory)
+        id: appinspect_mandatory
+        run: |
+          set +e
+          splunk-appinspect inspect \
+            ci/reports/sentinel.tar.gz \
+            --output-file ci/reports/appinspect_report.json \
+            --mode          precert \
+            --included-tags splunk_appinspect \
+            --log-level     INFO \
+            2>&1 | tee ci/reports/appinspect_run.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Run App Inspect — cloud tag (informational)
+        id: appinspect_cloud
+        run: |
+          set +e
+          splunk-appinspect inspect \
+            ci/reports/sentinel.tar.gz \
+            --output-file ci/reports/appinspect_cloud_report.json \
+            --mode          precert \
+            --included-tags cloud \
+            --log-level     WARNING \
+            2>&1 | tee ci/reports/appinspect_cloud_run.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Summarise App Inspect results
+        if: always()
+        id: summarise
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+
+          def summarise(report_path, tag_label, fail_on_failure):
+              if not os.path.exists(report_path):
+                  print(f"::warning::{tag_label} report not found.")
+                  return 0, 0
+              with open(report_path) as fh:
+                  report = json.load(fh)
+              summary  = report.get("summary", {})
+              failures = summary.get("failure", 0)
+              warnings = summary.get("warning", 0)
+              passed   = summary.get("success", 0)
+              errors   = summary.get("error",   0)
+
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                  f.write(f"\n## App Inspect — {tag_label}\n\n")
+                  f.write("| ✅ Passed | ❌ Failures | ⚠️ Warnings | 🔴 Errors |\n")
+                  f.write("|---------|-----------|-----------|--------|\n")
+                  f.write(f"| {passed} | {failures} | {warnings} | {errors} |\n\n")
+                  if failures > 0 or errors > 0:
+                      f.write("**Failures:**\n\n")
+                      for group in report.get("reports", []):
+                          for check in group.get("checks", []):
+                              if check.get("result") in ("failure", "error"):
+                                  f.write(f"- `{check['name']}`: {check.get('description','')}\n")
+                                  for msg in check.get("messages", []):
+                                      f.write(f"  - `{msg.get('filename','?')}:{msg.get('line','?')}` {msg.get('message','')}\n")
+                      f.write("\n")
+
+              for group in report.get("reports", []):
+                  for check in group.get("checks", []):
+                      status = check.get("result")
+                      for msg in check.get("messages", []):
+                          fn   = msg.get("filename", "unknown")
+                          line = msg.get("line", 1)
+                          text = msg.get("message", check.get("description", ""))
+                          name = check.get("name", "")
+                          if status in ("failure", "error") and fail_on_failure:
+                              print(f"::error file={fn},line={line}::[AppInspect/{name}] {text}")
+                          elif status == "warning":
+                              print(f"::warning file={fn},line={line}::[AppInspect/{name}] {text}")
+              return failures, warnings
+
+          fail_f, fail_w = summarise(
+              "ci/reports/appinspect_report.json",
+              "splunk_appinspect (mandatory)",
+              fail_on_failure=True,
+          )
+          cloud_f, cloud_w = summarise(
+              "ci/reports/appinspect_cloud_report.json",
+              "cloud (informational)",
+              fail_on_failure=False,
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"mandatory_failures={fail_f}\n")
+              fh.write(f"mandatory_warnings={fail_w}\n")
+              fh.write(f"cloud_failures={cloud_f}\n")
+          PYEOF
+
+      - name: Fail on mandatory check failures
+        if: steps.appinspect_mandatory.outputs.exit_code != '0'
+        run: |
+          echo "::error::App Inspect found ${{ steps.summarise.outputs.mandatory_failures }} mandatory failure(s). See artifact for full report."
+          exit 1
+
+      - name: Warn on optional findings (non-blocking)
+        if: >
+          steps.appinspect_mandatory.outputs.exit_code == '0' &&
+          steps.summarise.outputs.mandatory_warnings != '0'
+        run: |
+          echo "::warning::App Inspect reported ${{ steps.summarise.outputs.mandatory_warnings }} warning(s). Review appinspect-reports artifact."
+
+      - name: Upload App Inspect artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appinspect-reports
+          path: |
+            ci/reports/appinspect_report.json
+            ci/reports/appinspect_cloud_report.json
+            ci/reports/appinspect_run.log
+            ci/reports/appinspect_cloud_run.log
+          retention-days: 90
+
+      - name: Upload release-ready package (main branch, clean inspect only)
+        if: >
+          success() &&
+          github.ref == 'refs/heads/main' &&
+          steps.appinspect_mandatory.outputs.exit_code == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-app-${{ github.sha }}
+          path: ci/reports/sentinel.tar.gz
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # Job 4: integration
+  # Full end-to-end smoke test using _Mock*Agent classes (no live Splunk).
+  # Only runs on workflow_dispatch with run_integration=true, or when the
+  # SENTINEL_RUN_INTEGRATION secret is set on the repository.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Integration Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: unit-tests
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.run_integration == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          if [ -s app/sentinel/lib/requirements.txt ]; then
+            pip install -r app/sentinel/lib/requirements.txt
+          fi
+          pip install pytest pytest-cov pytest-mock pytest-timeout requests urllib3
+
+      - name: Create CI reports directory
+        run: mkdir -p ci/reports
+
+      - name: Run integration tests (mock-only, no live Splunk)
+        run: |
+          pytest tests/integration \
+            -c ci/pytest.ini \
+            --tb=long \
+            --junit-xml=ci/reports/junit-integration.xml \
+            -m integration \
+            -v
+        env:
+          # Mock-mode integration tests use _Mock*Agent — no live Splunk needed.
+          # Set to "1" only here, so these tests are always skipped in unit-tests job.
+          SENTINEL_RUN_INTEGRATION: "1"
+          # Stub credentials — _Mock*Agent never calls real endpoints
+          SENTINEL_MCP_TOKEN: "ci-mock-token"
+          SENTINEL_HOSTED_MODEL_TOKEN: "ci-mock-token"
+          SENTINEL_HEC_TOKEN: "ci-mock-token"
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: ci/reports/junit-integration.xml
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Job 5: demo-scenarios (informational, always last)
+  # Runs all four demo scenarios through the orchestrator in --dry-run mode.
+  # Validates that the end-to-end pipeline can be executed without errors.
+  # Only runs on pushes to main (not PRs) to save CI minutes.
+  # ---------------------------------------------------------------------------
+  demo-scenarios:
+    name: Demo Scenario Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: appinspect
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          if [ -s app/sentinel/lib/requirements.txt ]; then
+            pip install -r app/sentinel/lib/requirements.txt
+          fi
+          pip install requests urllib3
+
+      - name: Add sentinel bin to PYTHONPATH
+        run: echo "PYTHONPATH=${{ github.workspace }}/app/sentinel/bin" >> "$GITHUB_ENV"
+
+      - name: Demo — ransomware scenario
+        run: |
+          python app/sentinel/bin/sentinel_orchestrator.py \
+            --demo \
+            --scenario ransomware \
+            --dry-run \
+            --once
+        env:
+          SENTINEL_MCP_TOKEN: "ci-demo-token"
+          SENTINEL_HOSTED_MODEL_TOKEN: "ci-demo-token"
+
+      - name: Demo — insider threat scenario
+        run: |
+          python app/sentinel/bin/sentinel_orchestrator.py \
+            --demo \
+            --scenario insider_threat \
+            --dry-run \
+            --once
+        env:
+          SENTINEL_MCP_TOKEN: "ci-demo-token"
+          SENTINEL_HOSTED_MODEL_TOKEN: "ci-demo-token"
+
+      - name: Demo — supply chain scenario
+        run: |
+          python app/sentinel/bin/sentinel_orchestrator.py \
+            --demo \
+            --scenario supply_chain \
+            --dry-run \
+            --once
+        env:
+          SENTINEL_MCP_TOKEN: "ci-demo-token"
+          SENTINEL_HOSTED_MODEL_TOKEN: "ci-demo-token"
+
+      - name: Demo — cloud breach scenario
+        run: |
+          python app/sentinel/bin/sentinel_orchestrator.py \
+            --demo \
+            --scenario cloud_breach \
+            --dry-run \
+            --once
+        env:
+          SENTINEL_MCP_TOKEN: "ci-demo-token"
+          SENTINEL_HOSTED_MODEL_TOKEN: "ci-demo-token"

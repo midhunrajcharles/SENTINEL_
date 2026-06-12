@@ -1,0 +1,311 @@
+# =============================================================================
+# SENTINEL: Autonomous Agentic SOC Commander
+# ci/appinspect.yml — Splunk App Inspect GitHub Actions workflow
+#
+# Validates the sentinel app package against Splunk's App Inspect rules before
+# any release or Splunkbase submission. Runs on every push to main/release
+# branches and on any pull request targeting those branches.
+#
+# Mandatory check failures → workflow fails (blocks merge).
+# Warning-level findings  → reported as annotations, do not block merge.
+# The full JSON report is always uploaded as a workflow artifact.
+# =============================================================================
+
+name: Splunk App Inspect
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "release/**"
+    paths:
+      # Only re-run App Inspect when app source changes, not on docs/test edits
+      - "app/sentinel/**"
+      - "ci/appinspect.yml"
+  pull_request:
+    branches:
+      - main
+      - master
+      - "release/**"
+    paths:
+      - "app/sentinel/**"
+      - "ci/appinspect.yml"
+
+env:
+  PYTHON_VERSION: "3.9"
+  APP_DIR: "app/sentinel"
+  APP_PACKAGE_NAME: "sentinel"
+  REPORTS_DIR: "ci/reports"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: unit-tests
+  # Run the full unit test suite before packaging. App Inspect only validates
+  # Splunk packaging conventions; pytest catches logic regressions. Both must
+  # pass before the artifact is considered releasable.
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: |
+          pip install --upgrade pip
+          # Install app runtime deps if requirements.txt is non-empty
+          if [ -s app/sentinel/lib/requirements.txt ]; then
+            pip install -r app/sentinel/lib/requirements.txt
+          fi
+
+      - name: Install test dependencies
+        run: |
+          pip install \
+            pytest \
+            pytest-cov \
+            pytest-mock \
+            requests \
+            urllib3
+
+      - name: Create CI reports directory
+        run: mkdir -p ci/reports
+
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/unit \
+            -c ci/pytest.ini \
+            --tb=short \
+            --junit-xml=ci/reports/junit.xml \
+            --cov=app/sentinel/bin \
+            --cov-report=xml:ci/reports/coverage.xml \
+            --cov-report=term-missing:skip-covered \
+            --cov-fail-under=80
+        env:
+          # Explicitly exclude integration tests (safety net in addition to marker filtering)
+          SENTINEL_RUN_INTEGRATION: "0"
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            ci/reports/junit.xml
+            ci/reports/coverage.xml
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Job 2: appinspect
+  # Packages the app and runs Splunk App Inspect CLI against it.
+  # Depends on unit-tests passing so we never inspect broken code.
+  # ---------------------------------------------------------------------------
+  appinspect:
+    name: Splunk App Inspect
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: unit-tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Splunk App Inspect CLI
+        run: |
+          pip install --upgrade pip
+          pip install splunk-appinspect
+          # Verify installation
+          splunk-appinspect --version
+
+      - name: Create CI reports directory
+        run: mkdir -p ci/reports
+
+      # App Inspect operates on a packaged .tar.gz or the app directory directly.
+      # Packaging first lets us validate exactly what would be submitted to Splunkbase.
+      - name: Package the sentinel app
+        run: |
+          # Exclude local/ overrides, __pycache__, .pyc, test data, and CI files
+          tar \
+            --exclude="${{ env.APP_DIR }}/local" \
+            --exclude="${{ env.APP_DIR }}/metadata/local.meta" \
+            --exclude="${{ env.APP_DIR }}/lookups/asset_criticality_lookup.csv" \
+            --exclude="**/__pycache__" \
+            --exclude="**/*.pyc" \
+            --exclude="**/*.pyo" \
+            --exclude="**/.DS_Store" \
+            --exclude="**/.git" \
+            -czf ci/reports/${{ env.APP_PACKAGE_NAME }}.tar.gz \
+            -C app \
+            sentinel
+          echo "Package size: $(du -sh ci/reports/${{ env.APP_PACKAGE_NAME }}.tar.gz | cut -f1)"
+
+      # Run App Inspect with the full splunk_appinspect tag set.
+      # --mode=precert is equivalent to what Splunkbase runs pre-publish.
+      # Exit codes:
+      #   0  — all checks pass (including optionals)
+      #   1  — at least one mandatory check failed  → we fail the job
+      #   2  — warnings only (no mandatory failures) → we report but pass
+      - name: Run Splunk App Inspect
+        id: appinspect_run
+        run: |
+          set +e   # Don't exit immediately on non-zero — we parse the report first
+
+          splunk-appinspect inspect \
+            ci/reports/${{ env.APP_PACKAGE_NAME }}.tar.gz \
+            --output-file ci/reports/appinspect_report.json \
+            --mode          precert \
+            --included-tags splunk_appinspect \
+            --log-level     INFO \
+            2>&1 | tee ci/reports/appinspect_run.log
+
+          APPINSPECT_EXIT=$?
+          echo "appinspect_exit_code=$APPINSPECT_EXIT" >> "$GITHUB_OUTPUT"
+
+          # Also run with cloud tag to catch Splunk Cloud readiness issues
+          splunk-appinspect inspect \
+            ci/reports/${{ env.APP_PACKAGE_NAME }}.tar.gz \
+            --output-file ci/reports/appinspect_cloud_report.json \
+            --mode          precert \
+            --included-tags cloud \
+            --log-level     WARNING \
+            2>&1 | tee ci/reports/appinspect_cloud_run.log
+          # Cloud check exit code is informational only — don't fail on it
+          CLOUD_EXIT=$?
+          echo "cloud_exit_code=$CLOUD_EXIT" >> "$GITHUB_OUTPUT"
+
+          # Re-export the primary exit code as the step's result
+          exit $APPINSPECT_EXIT
+
+      # Parse the JSON report to emit failure/warning counts as step summary
+      - name: Parse App Inspect report
+        if: always()
+        id: parse_report
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+
+          report_path = "ci/reports/appinspect_report.json"
+          if not os.path.exists(report_path):
+              print("::warning::App Inspect report not found — inspection may have failed to start.")
+              sys.exit(0)
+
+          with open(report_path) as fh:
+              report = json.load(fh)
+
+          summary  = report.get("summary", {})
+          failures = summary.get("failure", 0)
+          warnings = summary.get("warning", 0)
+          errors   = summary.get("error",   0)
+          skipped  = summary.get("skipped", 0)
+          passed   = summary.get("success", 0)
+
+          # Emit GitHub step summary
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Splunk App Inspect Results\n\n")
+              f.write(f"| Status | Count |\n|--------|-------|\n")
+              f.write(f"| ✅ Passed  | {passed}   |\n")
+              f.write(f"| ❌ Failures | {failures} |\n")
+              f.write(f"| ⚠️ Warnings | {warnings} |\n")
+              f.write(f"| 🔴 Errors   | {errors}   |\n")
+              f.write(f"| ⏭️ Skipped  | {skipped}  |\n\n")
+
+              if failures > 0 or errors > 0:
+                  f.write("### ❌ Mandatory Check Failures\n\n")
+                  for group in report.get("reports", []):
+                      for check in group.get("checks", []):
+                          if check.get("result") in ("failure", "error"):
+                              f.write(f"- **{check['name']}**: {check.get('description','')}\n")
+                              for msg in check.get("messages", []):
+                                  f.write(f"  - `{msg.get('filename','?')}:{msg.get('line','?')}` — {msg.get('message','')}\n")
+                  f.write("\n")
+
+              if warnings > 0:
+                  f.write("### ⚠️ Warnings (non-blocking)\n\n")
+                  for group in report.get("reports", []):
+                      for check in group.get("checks", []):
+                          if check.get("result") == "warning":
+                              f.write(f"- **{check['name']}**: {check.get('description','')}\n")
+
+          # Emit inline annotations for failures
+          for group in report.get("reports", []):
+              for check in group.get("checks", []):
+                  if check.get("result") in ("failure", "error"):
+                      for msg in check.get("messages", []):
+                          fname = msg.get("filename", "unknown")
+                          line  = msg.get("line", 1)
+                          text  = msg.get("message", check.get("description",""))
+                          print(f"::error file={fname},line={line}::[AppInspect:{check['name']}] {text}")
+                  elif check.get("result") == "warning":
+                      for msg in check.get("messages", []):
+                          fname = msg.get("filename", "unknown")
+                          line  = msg.get("line", 1)
+                          text  = msg.get("message", check.get("description",""))
+                          print(f"::warning file={fname},line={line}::[AppInspect:{check['name']}] {text}")
+
+          # Set output variables for downstream use
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"failure_count={failures}\n")
+              f.write(f"warning_count={warnings}\n")
+
+          print(f"\nApp Inspect summary: {passed} passed, {failures} failures, {warnings} warnings, {errors} errors")
+          PYEOF
+
+      # Fail the job explicitly if mandatory checks failed.
+      # This is a separate step so the report-parsing step always runs.
+      - name: Fail on mandatory check failures
+        if: steps.appinspect_run.outputs.appinspect_exit_code != '0'
+        run: |
+          FAILURES="${{ steps.parse_report.outputs.failure_count }}"
+          echo "::error::App Inspect found ${FAILURES} mandatory check failure(s)."
+          echo "Review the appinspect_report artifact for details."
+          exit 1
+
+      # Warn (but don't fail) when optional checks have findings
+      - name: Report optional check warnings
+        if: >
+          steps.appinspect_run.outputs.appinspect_exit_code == '0' &&
+          steps.parse_report.outputs.warning_count != '0'
+        run: |
+          WARNINGS="${{ steps.parse_report.outputs.warning_count }}"
+          echo "::warning::App Inspect found ${WARNINGS} optional check warning(s). Review the artifact."
+
+      # Always upload the full JSON report as an artifact
+      - name: Upload App Inspect reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appinspect-reports
+          path: |
+            ci/reports/appinspect_report.json
+            ci/reports/appinspect_cloud_report.json
+            ci/reports/appinspect_run.log
+            ci/reports/appinspect_cloud_run.log
+            ci/reports/${{ env.APP_PACKAGE_NAME }}.tar.gz
+          retention-days: 90
+
+      # On a successful clean run, also attach the package as a release artifact
+      - name: Upload releasable package
+        if: >
+          success() &&
+          github.ref == 'refs/heads/main' &&
+          steps.appinspect_run.outputs.appinspect_exit_code == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-app-package
+          path: ci/reports/${{ env.APP_PACKAGE_NAME }}.tar.gz
+          retention-days: 90

@@ -1,0 +1,38 @@
+# Byte-compiled / cached
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test artifacts
+.pytest_cache/
+tests/integration/report_*.html
+.coverage
+htmlcov/
+
+# Splunk installer / install artifacts (large binaries, machine-specific logs)
+*.msi
+splunk_install.log
+
+# SENTINEL local overrides and secrets (never commit real credentials)
+app/sentinel/local/
+mcp_server/config/*.local.conf
+mcp_server/config/auth_tokens.local.conf
+mcp_server/certs/
+*.pem
+*.key
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/

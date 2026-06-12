@@ -1,0 +1,266 @@
+{
+  "$schema": "https://sentinel.local/tests/sample_investigations.schema.json",
+  "description": "5 complete SherlockInvestigationReport fixtures for unit and integration testing. Ordered by complexity (simple FP → complex APT supply chain).",
+  "reports": [
+    {
+      "report_id":  "INV-001",
+      "case_id":    "CASE-TEST-FP-001",
+      "alert_type": "MALWARE_EXECUTION_CERTUTIL",
+      "complexity": "trivial",
+      "threat_type": "FALSE_POSITIVE",
+      "classification": "FALSE_POSITIVE_IT_ADMIN",
+      "false_positive_probability": 0.94,
+      "phases_completed": ["A"],
+      "executive_summary": "certutil.exe invoked by IT administrator to verify an internal certificate. No download flag used; no network connection initiated. High-confidence false positive.",
+      "attack_narrative": "CORP\\it_admin01 ran certutil.exe -verify on a local certificate file. This triggered the LOLBAS rule due to keyword match on 'certutil'. No malicious activity detected.",
+      "blast_radius": {
+        "compromised_hosts":   [],
+        "targeted_hosts":      [],
+        "suspected_hosts":     [],
+        "compromised_users":   [],
+        "affected_services":   [],
+        "data_at_risk":        "none",
+        "files_encrypted":     0,
+        "estimated_dwell_time_minutes": 0
+      },
+      "threat_assessment": {
+        "malware_family":       null,
+        "threat_actor":         null,
+        "actor_sophistication": "N/A",
+        "ttp_mapping":          [],
+        "confidence":           0.94,
+        "urgency":              "NONE"
+      },
+      "iocs_discovered": [],
+      "recommended_actions": [
+        { "action": "close_case", "target": "CASE-TEST-FP-001", "priority": 1,
+          "justification": "False positive — approved IT activity. Tune rule to exclude certutil -verify." }
+      ],
+      "evidence_items": [
+        { "type": "process_event", "host": "WORKSTATION-02", "user": "CORP\\it_admin01",
+          "process": "certutil.exe", "args": "certutil.exe -verify C:\\Certs\\corp_root_ca.crt",
+          "signed": true, "network_connection": false }
+      ],
+      "queries_run": 2,
+      "total_investigation_time_s": 4.2,
+      "model_used": "rule_based_fallback"
+    },
+    {
+      "report_id":  "INV-002",
+      "case_id":    "CASE-TEST-BF-002",
+      "alert_type": "BRUTE_FORCE_RDP",
+      "complexity": "low",
+      "threat_type": "BRUTE_FORCE",
+      "classification": "BRUTE_FORCE_EXTERNAL",
+      "false_positive_probability": 0.05,
+      "phases_completed": ["A", "B", "E"],
+      "executive_summary": "External RDP brute force from 91.108.4.200 targeting JUMP-SRV01. 847 failed authentication attempts over 30 minutes. No successful login detected. Source IP is a known scanning host with 29/93 VT detections.",
+      "attack_narrative": "Automated RDP brute force from a Shodan-listed scanner at 91.108.4.200 targeted the exposed jump server on port 3389. 847 failures; no successful authentication. Attack began at 03:12 UTC and self-terminated at 03:42 UTC.",
+      "blast_radius": {
+        "compromised_hosts":   [],
+        "targeted_hosts":      ["JUMP-SRV01"],
+        "suspected_hosts":     [],
+        "compromised_users":   [],
+        "affected_services":   ["JUMP-SRV01:3389"],
+        "data_at_risk":        "none — no successful authentication",
+        "files_encrypted":     0,
+        "estimated_dwell_time_minutes": 0
+      },
+      "threat_assessment": {
+        "malware_family":       null,
+        "threat_actor":         "opportunistic scanner",
+        "actor_sophistication": "LOW",
+        "ttp_mapping":          ["T1110.001"],
+        "confidence":           0.88,
+        "urgency":              "MEDIUM"
+      },
+      "iocs_discovered": [
+        { "value": "91.108.4.200", "type": "ip", "verdict": "malicious",
+          "vt_detections": "29/93", "tags": ["scanner", "rdp-bruteforce"] }
+      ],
+      "recommended_actions": [
+        { "action": "block_ip",         "target": "91.108.4.200",  "priority": 1 },
+        { "action": "create_ticket",    "target": "ServiceNow",    "priority": 2 },
+        { "action": "notify_stakeholders", "target": "soc-oncall", "priority": 3 }
+      ],
+      "evidence_items": [
+        { "type": "auth_event", "host": "JUMP-SRV01", "src_ip": "91.108.4.200",
+          "dest_port": 3389, "failed_count": 847, "successful_count": 0, "duration_min": 30 }
+      ],
+      "queries_run": 6,
+      "total_investigation_time_s": 18.7,
+      "model_used": "foundation-sec-1.1-8b-instruct"
+    },
+    {
+      "report_id":  "INV-003",
+      "case_id":    "CASE-TEST-INS-003",
+      "alert_type": "DATA_EXFILTRATION_LARGE_TRANSFER",
+      "complexity": "medium",
+      "threat_type": "INSIDER_THREAT",
+      "classification": "INSIDER_THREAT_DATA_EXFIL",
+      "false_positive_probability": 0.06,
+      "phases_completed": ["A", "B", "D", "E"],
+      "executive_summary": "Finance analyst jsmith is exfiltrating sensitive M&A data to a personal Dropbox account. He resigned 3 days ago. Multi-day campaign: 3,200 SharePoint files downloaded, 8.2 GB to USB, 50 GB to Dropbox. CONTAINMENT_ONLY mode — eradication requires HR/Legal approval.",
+      "attack_narrative": "jsmith began collecting data 24 hours after resignation. Bulk SharePoint download (3,200 files) on 2026-06-04, USB write (8.2 GB) on 2026-06-05, Dropbox upload (50 GB) on 2026-06-06. Network analysis confirms 1,847 Dropbox API sessions. No credential compromise of other accounts.",
+      "blast_radius": {
+        "compromised_hosts":   [],
+        "targeted_hosts":      [],
+        "suspected_hosts":     [],
+        "compromised_users":   ["CORP\\jsmith"],
+        "affected_services":   ["SharePoint M&A-Deals-2026", "SharePoint Client-Data-Rooms"],
+        "data_at_risk":        "~50 GB M&A deal documents, PE portfolio models, client PII",
+        "files_encrypted":     0,
+        "estimated_dwell_time_minutes": 2880
+      },
+      "threat_assessment": {
+        "malware_family":       null,
+        "threat_actor":         "Malicious Insider — jsmith",
+        "actor_sophistication": "LOW",
+        "ttp_mapping":          ["T1048.002", "T1567.002", "T1078", "T1213"],
+        "confidence":           0.87,
+        "urgency":              "HIGH"
+      },
+      "iocs_discovered": [
+        { "value": "content.dropboxapi.com", "type": "domain", "verdict": "suspicious",
+          "context": "Legitimate Dropbox CDN used for unauthorised bulk exfiltration" }
+      ],
+      "recommended_actions": [
+        { "action": "trigger_playbook",   "target": "INSIDER_THREAT_CONTAINMENT", "priority": 1 },
+        { "action": "create_ticket",      "target": "ServiceNow", "priority": 2, "legal_hold": true },
+        { "action": "notify_stakeholders","target": "hr-director@corp.com,legal@corp.com,ciso@corp.com", "priority": 3 }
+      ],
+      "evidence_items": [
+        { "type": "dlp_event", "host": "DESKTOP-XYZ789", "user": "CORP\\jsmith",
+          "bytes_transferred": 52742963200, "dest_host": "content.dropboxapi.com",
+          "session_count": 1847, "duration_s": 14400 },
+        { "type": "hr_context", "user": "jsmith", "resignation_date": "2026-06-03",
+          "days_since_resignation": 3, "offboarding_ticket": "HR-29847" }
+      ],
+      "queries_run": 12,
+      "total_investigation_time_s": 47.3,
+      "model_used": "foundation-sec-1.1-8b-instruct"
+    },
+    {
+      "report_id":  "INV-004",
+      "case_id":    "CASE-TEST-RAN-004",
+      "alert_type": "RANSOMWARE_POWERSHELL_ENCODED",
+      "complexity": "high",
+      "threat_type": "RANSOMWARE",
+      "classification": "RANSOMWARE_INITIAL_ACCESS",
+      "false_positive_probability": 0.02,
+      "phases_completed": ["A", "B", "C", "D", "E"],
+      "executive_summary": "LockBit 3.0 ransomware confirmed on DESKTOP-ABC123. Initial access via phishing email. LSASS credential dump enabled lateral movement to FILESERVER01. 12 files encrypted before containment. C2 beaconing to 185.220.101.42. Estimated dwell time: 7 minutes.",
+      "attack_narrative": "Threat actor delivered Q1_Invoice_URGENT.docm via spear-phishing to jdoe@corp.com. Macro executed PowerShell encoded downloader. LockBit 3.0 loader injected into svchost.exe and accessed LSASS for credentials. svc_backup account used for SMB lateral movement to FILESERVER01. 12 Finance files encrypted before EDR isolation. C2: 185.220.101.42:443.",
+      "blast_radius": {
+        "compromised_hosts":   ["DESKTOP-ABC123", "FILESERVER01"],
+        "targeted_hosts":      ["DESKTOP-DEF456", "DESKTOP-GHI789"],
+        "suspected_hosts":     ["PRINT-SRV01"],
+        "compromised_users":   ["CORP\\jdoe", "CORP\\svc_backup"],
+        "affected_services":   ["\\\\FILESERVER01\\Finance$", "\\\\FILESERVER01\\HR$"],
+        "data_at_risk":        "Finance share (2.1 TB), HR share (450 GB)",
+        "files_encrypted":     12,
+        "estimated_dwell_time_minutes": 7
+      },
+      "threat_assessment": {
+        "malware_family":       "LockBit.3.0",
+        "threat_actor":         "CARBON-SPIDER",
+        "actor_sophistication": "HIGH",
+        "ttp_mapping":          ["T1566.001", "T1059.001", "T1003.001", "T1021.002", "T1486"],
+        "confidence":           0.97,
+        "urgency":              "IMMEDIATE"
+      },
+      "iocs_discovered": [
+        { "value": "185.220.101.42",  "type": "ip",     "verdict": "malicious", "vt_detections": "52/93" },
+        { "value": "update.microsoftsvc-cdn.com", "type": "domain", "verdict": "malicious" },
+        { "value": "a7f2b94e1c3d8f056a92b7e4d1c3f8a094e2b7d4c1f3a8e2b4d7c1f3a8e2b4d7",
+          "type": "sha256", "verdict": "malicious", "filename": "svchost_injected.dll" }
+      ],
+      "recommended_actions": [
+        { "action": "isolate_host",       "target": "DESKTOP-ABC123",      "priority": 1 },
+        { "action": "isolate_host",       "target": "FILESERVER01",        "priority": 2 },
+        { "action": "disable_user",       "target": "CORP\\jdoe",          "priority": 3 },
+        { "action": "disable_user",       "target": "CORP\\svc_backup",    "priority": 4 },
+        { "action": "block_ip",           "target": "185.220.101.42",      "priority": 5 },
+        { "action": "create_ticket",      "target": "ServiceNow",          "priority": 6 },
+        { "action": "notify_stakeholders","target": "soc-oncall,ciso",     "priority": 7 }
+      ],
+      "evidence_items": [
+        { "type": "process_event", "host": "DESKTOP-ABC123", "parent": "WINWORD.EXE",
+          "process": "powershell.exe", "args": "-NoP -NonI -W Hidden -Enc JABzAD0A...",
+          "anomaly": "Encoded PowerShell from Office process" },
+        { "type": "network_flow", "src_ip": "10.20.1.101", "dest_ip": "185.220.101.42",
+          "dest_port": 443, "bytes_out": 1240, "anomaly": "C2 beaconing" },
+        { "type": "lsass_access", "host": "DESKTOP-ABC123", "target_pid": 6201,
+          "access_mask": "0x1fffff", "anomaly": "Credential dumping" }
+      ],
+      "queries_run": 24,
+      "total_investigation_time_s": 298.4,
+      "model_used": "foundation-sec-1.1-8b-instruct"
+    },
+    {
+      "report_id":  "INV-005",
+      "case_id":    "CASE-TEST-APT-005",
+      "alert_type": "SUPPLY_CHAIN_HASH_MISMATCH",
+      "complexity": "very_high",
+      "threat_type": "SUPPLY_CHAIN_APT",
+      "classification": "SUPPLY_CHAIN_COMPROMISE",
+      "false_positive_probability": 0.03,
+      "phases_completed": ["A", "B", "C", "D", "E"],
+      "executive_summary": "Nation-state supply chain compromise by IRON-TEMPEST. Trojanized Acme Corp update signed with valid EV certificate. 14 hosts compromised across all business units. IRON-TEMPEST backdoor v2.1 established reverse shell to 91.108.4.200:8443 and exfiltrated credentials. Coordinated response: batch host isolation, vendor notification, credential reset, sandbox submission.",
+      "attack_narrative": "IRON-TEMPEST compromised Acme Corp's build pipeline and replaced v4.2.1 with a trojanized binary (hash mismatch, 0/72 VT — novel sample). Auto-update policy distributed the backdoor to 14 hosts. Each host spawned cmd.exe via process hollowing, created 'AcmeUpdateSvc' scheduled task for persistence, and called back to 91.108.4.200:8443. Credential exfiltration via environment variable harvesting confirmed. Root cause: Acme Corp's CI/CD signing key compromised.",
+      "blast_radius": {
+        "compromised_hosts":   ["DESKTOP-FLEET-001","DESKTOP-FLEET-002","DESKTOP-FLEET-003",
+                                "DESKTOP-FLEET-004","DESKTOP-FLEET-005","DESKTOP-FLEET-006",
+                                "DESKTOP-FLEET-007","DESKTOP-FLEET-008","DESKTOP-FLEET-009",
+                                "DESKTOP-FLEET-010","DESKTOP-FLEET-011","DESKTOP-FLEET-012",
+                                "DESKTOP-FLEET-013","DESKTOP-FLEET-014"],
+        "targeted_hosts":      [],
+        "suspected_hosts":     [],
+        "compromised_users":   ["all 14 users logged in at time of execution"],
+        "affected_services":   ["Acme Enterprise Suite on all compromised hosts"],
+        "data_at_risk":        "Environment variables, DPAPI credentials, browser sessions on 14 hosts",
+        "files_encrypted":     0,
+        "estimated_dwell_time_minutes": 90
+      },
+      "threat_assessment": {
+        "malware_family":       "IRON-TEMPEST Backdoor v2.1",
+        "threat_actor":         "IRON-TEMPEST (Nation-state adjacent, espionage)",
+        "actor_sophistication": "VERY_HIGH",
+        "ttp_mapping":          ["T1195.002", "T1059.003", "T1053.005", "T1082", "T1552.001", "T1071.001"],
+        "confidence":           0.91,
+        "urgency":              "IMMEDIATE"
+      },
+      "iocs_discovered": [
+        { "value": "91.108.4.200", "type": "ip", "verdict": "malicious",
+          "vt_detections": "41/93", "malware_families": ["IRON-TEMPEST"] },
+        { "value": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4",
+          "type": "sha256", "verdict": "malicious", "vt_detections": "0/72",
+          "note": "Zero VT — novel sample; confirmed by sandbox" },
+        { "value": "AcmeUpdateSvc", "type": "scheduled_task", "verdict": "malicious" },
+        { "value": "updates.acmecorp.com", "type": "domain", "verdict": "suspicious",
+          "context": "Legitimate vendor domain — compromised distribution" }
+      ],
+      "recommended_actions": [
+        { "action": "isolate_host",       "target": "DESKTOP-FLEET-001 through 014 (batch)", "priority": 1 },
+        { "action": "block_ip",           "target": "91.108.4.200",          "priority": 2 },
+        { "action": "kill_process",       "target": "acme_update.exe (all)",  "priority": 3 },
+        { "action": "trigger_playbook",   "target": "SUPPLY_CHAIN_RESPONSE",  "priority": 4 },
+        { "action": "create_ticket",      "target": "ServiceNow",             "priority": 5 },
+        { "action": "notify_stakeholders","target": "ciso,legal,vendor-security@acmecorp.com", "priority": 6 }
+      ],
+      "evidence_items": [
+        { "type": "binary_diff", "filename": "acme_update.exe",
+          "expected_hash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+          "actual_hash":   "c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4",
+          "size_delta_bytes": 14336 },
+        { "type": "network_flow", "src_ip": "10.20.1.200", "dest_ip": "91.108.4.200",
+          "dest_port": 8443, "bytes_out": 2048, "anomaly": "IRON-TEMPEST C2" },
+        { "type": "scheduled_task", "host": "DESKTOP-FLEET-001", "task_name": "AcmeUpdateSvc",
+          "command": "C:\\ProgramData\\AcmeCorp\\svc.exe", "anomaly": "Persistence — not in legitimate software" }
+      ],
+      "queries_run": 38,
+      "total_investigation_time_s": 521.7,
+      "model_used": "foundation-sec-1.1-8b-instruct"
+    }
+  ]
+}
