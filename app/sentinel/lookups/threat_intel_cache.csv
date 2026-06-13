@@ -1,0 +1,5 @@
+ioc_type,ioc_value,verdict,abuse_confidence_score,total_reports,categories,malware_families,country_code,isp,source,last_checked,notes
+ip,185.220.101.42,malicious,98,1240,"15,18,19","Cobalt Strike,Emotet",DE,"Tor Exit Node Operator",cache_seed,2026-06-01T00:00:00Z,"Known Tor exit node observed as ransomware C2 — see INV-004 fixture"
+ip,45.155.205.233,malicious,87,512,"15,20","QakBot",NL,"M247 Europe SRL",cache_seed,2026-06-01T00:00:00Z,"Bulletproof hosting range associated with malware C2"
+ip,8.8.8.8,clean,0,0,"","",US,"Google LLC",cache_seed,2026-06-01T00:00:00Z,"Public DNS resolver — known-good reference entry"
+ip,1.1.1.1,clean,0,0,"","",US,"Cloudflare Inc",cache_seed,2026-06-01T00:00:00Z,"Public DNS resolver — known-good reference entry"
