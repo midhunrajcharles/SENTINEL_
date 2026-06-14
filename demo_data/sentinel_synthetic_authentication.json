@@ -1,0 +1,1 @@
+{"user": "CORP\\jdoe", "src": "WORKSTATION-07", "dest": "FILESERVER-01", "app": "smb", "action": "success", "host": "WORKSTATION-07", "_time": 1781391077.8256822}

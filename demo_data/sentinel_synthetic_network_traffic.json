@@ -1,0 +1,5 @@
+{"src": "WORKSTATION-07", "dest": "185.220.101.42", "dest_port": 443, "bytes_out": 2048, "bytes_in": 512, "action": "allowed", "transport": "tcp", "host": "WORKSTATION-07", "_time": 1781390677.8256822}
+{"src": "WORKSTATION-07", "dest": "185.220.101.42", "dest_port": 443, "bytes_out": 2176, "bytes_in": 512, "action": "allowed", "transport": "tcp", "host": "WORKSTATION-07", "_time": 1781390737.8256822}
+{"src": "WORKSTATION-07", "dest": "185.220.101.42", "dest_port": 443, "bytes_out": 2304, "bytes_in": 512, "action": "allowed", "transport": "tcp", "host": "WORKSTATION-07", "_time": 1781390797.8256822}
+{"src": "WORKSTATION-07", "dest": "185.220.101.42", "dest_port": 443, "bytes_out": 2432, "bytes_in": 512, "action": "allowed", "transport": "tcp", "host": "WORKSTATION-07", "_time": 1781390857.8256822}
+{"src": "WORKSTATION-07", "dest": "185.220.101.42", "dest_port": 443, "bytes_out": 2560, "bytes_in": 512, "action": "allowed", "transport": "tcp", "host": "WORKSTATION-07", "_time": 1781390917.8256822}
