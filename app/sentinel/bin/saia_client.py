@@ -43,9 +43,13 @@ _CACHE_PATH = Path(__file__).resolve().parent.parent / "lookups" / "saia_cached_
 
 # Default values substituted into {placeholder} tokens left unresolved by context
 _TEMPLATE_DEFAULTS = {
-    "earliest": "-24h",
-    "latest":   "now",
-    "host":     "WORKSTATION-07",
+    "earliest":         "-24h",
+    "latest":           "now",
+    "host":             "WORKSTATION-07",
+    "dest":             "FILESERVER-01",
+    "c2_ip":            "185.220.101.42",
+    "user":             "CORP\\jdoe",
+    "malicious_domain": "update-cdn-malicious-domain.com",
 }
 
 _PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
