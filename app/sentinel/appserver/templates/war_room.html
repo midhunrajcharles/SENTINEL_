@@ -17,7 +17,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SENTINEL — War Room</title>
+  <title>SENTINEL War Room</title>
 
   <!-- Splunk Simple XML hook: <dashboard stylesheet="sentinel_theme.css"> -->
   <link rel="stylesheet" href="/static/app/sentinel/css/sentinel_theme.css">
@@ -27,6 +27,10 @@
 
   <style>
     /* Page-specific layout overrides */
+    body {
+      background: var(--sentinel-bg);
+    }
+
     .investigation-scroll {
       flex: 1;
       overflow-y: auto;
@@ -243,6 +247,17 @@
         grid-template-columns: 320px 1fr 280px;
       }
     }
+
+    /* Agent Network / Threat Gauge / MCP Tool Log row */
+    .panel-visualization { grid-column: 1 / -1; }
+    .viz-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr 1fr;
+      gap: 1.25rem;
+      align-items: stretch;
+    }
+    .viz-block { display: flex; flex-direction: column; }
+    .mcp-log-scroll { max-height: 220px; overflow-y: auto; }
   </style>
 </head>
 <body>
@@ -280,9 +295,13 @@
   <div class="flex items-center gap-3">
     <span class="last-update" id="last-update-ts">Connecting…</span>
     <button class="btn btn-ghost btn-sm" id="btn-refresh" title="Refresh now (R)" aria-label="Refresh">
-      &#x21bb; Refresh
+      Refresh
     </button>
     <a href="/en-US/app/sentinel/performance" class="btn btn-ghost btn-sm">Performance</a>
+    <button class="btn-emergency-halt" id="btn-emergency-halt"
+            title="Halt every non-terminal case immediately" aria-label="Emergency halt all cases">
+      EMERGENCY HALT
+    </button>
   </div>
 </header>
 
@@ -368,13 +387,13 @@
       </div>
       <div class="override-controls" id="override-controls" style="display:none">
         <button class="btn btn-halt"     id="btn-halt"     title="Halt all autonomous actions (H)" aria-label="Halt case">
-          &#x26D4; HALT
+          HALT
         </button>
         <button class="btn btn-escalate" id="btn-escalate" title="Force escalate to analyst (E)" aria-label="Escalate case">
-          &#x21A5; ESCALATE
+          ESCALATE
         </button>
         <button class="btn btn-fp"       id="btn-fp"       title="Mark as false positive (F)" aria-label="Mark false positive">
-          &#x2715; FALSE POSITIVE
+          FALSE POSITIVE
         </button>
       </div>
     </div>
@@ -606,6 +625,60 @@
 </section>
 
 <!-- =====================================================================
+     AGENT VISUALIZATION — threat gauge, agent network graph, MCP tool log
+     ===================================================================== -->
+<section class="panel panel-visualization" id="visualization-panel" aria-label="Agent Visualization"
+         style="margin: 0 1.25rem 1rem;">
+
+  <div class="panel-header">
+    <h3>Agent Network &amp; Threat Posture</h3>
+  </div>
+
+  <div class="panel-body">
+    <div class="viz-grid">
+
+      <div class="viz-block" aria-label="Global threat level gauge">
+        <div class="threat-gauge-wrap">
+          <div class="threat-gauge" id="threat-gauge"></div>
+          <div class="threat-level-banner level-low" id="threat-level-banner">THREAT LEVEL: LOW</div>
+        </div>
+      </div>
+
+      <div class="viz-block" aria-label="Agent orchestration network">
+        <div class="agent-network" id="agent-network"></div>
+      </div>
+
+      <div class="viz-block" aria-label="MCP tool call log">
+        <div class="inv-section-title">MCP Tool Calls <span style="text-transform:none; letter-spacing:normal; font-weight:400;">· last 15m</span></div>
+        <div class="mcp-log mcp-log-scroll" id="mcp-log">
+          <div class="empty-state-sm">Loading MCP tool call log&hellip;</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- Emergency halt confirmation modal -->
+<div class="modal-backdrop" id="emergency-halt-modal" role="dialog"
+     aria-modal="true" aria-labelledby="emergency-halt-title">
+  <div class="modal">
+    <h2 id="emergency-halt-title" style="color:var(--sentinel-red-bright)">Emergency Halt — All Cases?</h2>
+    <p>
+      This will immediately set every non-terminal case to HALTED and stop all
+      autonomous agent activity across the entire SOC. This action affects every
+      active case, not just the selected one. Use only in a confirmed emergency.
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="emergency-halt-cancel">Cancel</button>
+      <button class="btn-emergency-halt" id="emergency-halt-confirm" style="font-size:0.82rem; padding:0.4rem 1rem">
+        Confirm Emergency Halt
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- =====================================================================
      FOOTER METRICS BAR
      ===================================================================== -->
 <footer class="panel-footer" role="contentinfo" aria-label="Global metrics">
@@ -674,7 +747,7 @@
 <div class="modal-backdrop" id="halt-modal" role="dialog"
      aria-modal="true" aria-labelledby="halt-title" aria-describedby="halt-desc">
   <div class="modal">
-    <h2 id="halt-title" style="color:var(--critical)">&#x26D4; Halt Autonomous Actions?</h2>
+    <h2 id="halt-title" style="color:var(--critical)">Halt Autonomous Actions?</h2>
     <p id="halt-desc">
       This will immediately stop all in-progress agent actions for case
       <strong id="halt-case-id"></strong> and set status to HALTED.
@@ -693,7 +766,7 @@
 <div class="modal-backdrop" id="escalate-modal" role="dialog"
      aria-modal="true" aria-labelledby="esc-title">
   <div class="modal">
-    <h2 id="esc-title" style="color:var(--high)">&#x21A5; Force Escalate?</h2>
+    <h2 id="esc-title" style="color:var(--high)">Force Escalate?</h2>
     <p>
       Case <strong id="esc-case-id"></strong> will be routed to the on-call
       analyst queue. Autonomous processing will pause pending analyst acknowledgement.
@@ -709,7 +782,7 @@
 <div class="modal-backdrop" id="fp-modal" role="dialog"
      aria-modal="true" aria-labelledby="fp-title">
   <div class="modal">
-    <h2 id="fp-title">&#x2715; Mark as False Positive?</h2>
+    <h2 id="fp-title">Mark as False Positive?</h2>
     <p>
       Case <strong id="fp-case-id"></strong> will be closed as FALSE_POSITIVE
       and submitted to Sage for detection-rule learning.
@@ -731,6 +804,7 @@
      ===================================================================== -->
 <script src="/static/app/sentinel/js/agent_status.js"></script>
 <script src="/static/app/sentinel/js/case_timeline.js"></script>
+<script src="/static/app/sentinel/js/agent_visualization.js"></script>
 <script src="/static/app/sentinel/js/war_room.js"></script>
 </body>
 </html>

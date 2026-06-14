@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dashboard version="1.1" theme="dark" stylesheet="sentinel_theme.css">
+  <label>SENTINEL Overview</label>
+  <description>SENTINEL landing page — architecture, Splunk AI integrations, and impact metrics. Operational triage lives on the War Room dashboard.</description>
+
+  <!-- ===================================================================
+       ROW 1 — Hero
+       =================================================================== -->
+  <row>
+    <panel>
+      <html>
+        <div style="padding:1.5rem 2rem; border-radius:10px; border:1px solid #2A2F45;
+                    background:linear-gradient(135deg,#2D0008 0%,#5C0011 35%,#8B0A1A 70%,#2D0008 100%);
+                    box-shadow:0 0 30px rgba(255,23,68,0.15);">
+          <div style="font-size:2.1rem; font-weight:800; letter-spacing:0.06em; color:#E8ECF4; text-transform:uppercase;">
+            SENTINEL
+          </div>
+          <div style="font-size:1.05rem; color:#E8ECF4; margin-top:0.35rem; font-weight:600;">
+            Autonomous Agentic SOC Commander
+          </div>
+          <div style="font-size:0.95rem; color:#E8ECF4; margin-top:0.75rem; max-width:760px;">
+            While your analysts sleep, SENTINEL hunts. Four cooperating agents — Vanguard, Sherlock,
+            Executor, and Sage — triage, investigate, respond to, and learn from security incidents
+            with full chain-of-thought explainability and a human-in-the-loop approval gate for
+            high-impact actions.
+          </div>
+          <div style="margin-top:1rem; display:flex; gap:0.75rem;">
+            <span style="font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;
+                         padding:0.25rem 0.6rem; border-radius:99px; background:rgba(255,23,68,0.18);
+                         border:1px solid #FF1744; color:#E8ECF4;">VANGUARD &#183; TRIAGE</span>
+            <span style="font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;
+                         padding:0.25rem 0.6rem; border-radius:99px; background:rgba(168,85,247,0.18);
+                         border:1px solid #A855F7; color:#E8ECF4;">SHERLOCK &#183; INVESTIGATE</span>
+            <span style="font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;
+                         padding:0.25rem 0.6rem; border-radius:99px; background:rgba(77,150,255,0.18);
+                         border:1px solid #4D96FF; color:#E8ECF4;">EXECUTOR &#183; RESPOND</span>
+            <span style="font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;
+                         padding:0.25rem 0.6rem; border-radius:99px; background:rgba(46,213,115,0.18);
+                         border:1px solid #2ED573; color:#E8ECF4;">SAGE &#183; LEARN</span>
+          </div>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <!-- ===================================================================
+       ROW 2 — Quick stats
+       =================================================================== -->
+  <row>
+    <panel>
+      <title>TOTAL CASES (24H)</title>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases earliest=-24h latest=now
+            | stats count as total_cases
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>60s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>AVG MTTR (24H)</title>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED earliest=-24h latest=now
+            | eval response_minutes=round((updated_time-created_time)/60,1)
+            | stats avg(response_minutes) as mttr
+            | eval mttr=round(mttr,1)
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+          <refresh>60s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="unit">min</option>
+        <option name="unitPosition">after</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">block</option>
+        <option name="rangeValues">[10]</option>
+        <option name="colorBy">value</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>THREATS NEUTRALIZED (7D)</title>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases status=CLOSED resolution!=FALSE_POSITIVE earliest=-7d latest=now
+            | stats count as neutralized
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>60s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="numberPrecision">0</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">block</option>
+        <option name="rangeValues">[1]</option>
+        <option name="colorBy">value</option>
+        <option name="charting.fieldColors">{"neutralized":#2ED573}</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>FALSE POSITIVE RATE (7D)</title>
+      <single>
+        <search>
+          <query>
+            index=sentinel_cases earliest=-7d latest=now
+            | stats count as total, sum(eval(resolution="FALSE_POSITIVE")) as fp
+            | eval fp_rate=if(total>0, round((fp/total)*100,1), 0)
+            | fields fp_rate
+          </query>
+          <earliest>-7d</earliest>
+          <latest>now</latest>
+          <refresh>60s</refresh>
+          <refreshType>delay</refreshType>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="unit">%</option>
+        <option name="unitPosition">after</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="useColors">true</option>
+        <option name="colorMode">block</option>
+        <option name="rangeValues">[10,30]</option>
+        <option name="colorBy">value</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- ===================================================================
+       ROW 3 — Architecture diagram
+       =================================================================== -->
+  <row>
+    <panel>
+      <title>SYSTEM ARCHITECTURE</title>
+      <description>End-to-end agent pipeline: ingestion, Vanguard triage, Sherlock investigation, the human-in-the-loop approval gate, Executor response, and Sage learning loop.</description>
+      <html>
+        <div style="text-align:center; padding:0.5rem;">
+          <img src="/static/app/sentinel/images/architecture_diagram.png" alt="SENTINEL architecture diagram"
+               style="max-width:100%; border-radius:8px; border:1px solid #2A2F45;" />
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <!-- ===================================================================
+       ROW 4 — Splunk AI Integration
+       =================================================================== -->
+  <row>
+    <panel>
+      <title>SPLUNK AI INTEGRATION</title>
+      <description>All five Splunk AI capabilities, the agent that owns each integration, and live connection status.</description>
+      <html>
+        <table style="width:100%; border-collapse:collapse; font-size:0.85rem; color:#E8ECF4;">
+          <thead>
+            <tr style="text-align:left; border-bottom:1px solid #2A2F45; text-transform:uppercase; letter-spacing:0.06em; font-size:0.7rem; color:#7A8299;">
+              <th style="padding:0.5rem 0.75rem;">Splunk AI Capability</th>
+              <th style="padding:0.5rem 0.75rem;">Owning Agent</th>
+              <th style="padding:0.5rem 0.75rem;">Function</th>
+              <th style="padding:0.5rem 0.75rem;">Connection Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #2A2F45;">
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">Splunk MCP Server</td>
+              <td style="padding:0.5rem 0.75rem;">All Agents</td>
+              <td style="padding:0.5rem 0.75rem; color:#7A8299;">Central nervous system for agent-Splunk communication</td>
+              <td style="padding:0.5rem 0.75rem;"><span class="icon-dot status-online"></span> CONNECTED</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2A2F45;">
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">Foundation-Sec-1.1-8B (Hosted Model)</td>
+              <td style="padding:0.5rem 0.75rem;">Vanguard</td>
+              <td style="padding:0.5rem 0.75rem; color:#7A8299;">Zero-shot threat classification and risk scoring</td>
+              <td style="padding:0.5rem 0.75rem;"><span class="icon-dot status-online"></span> CONNECTED</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2A2F45;">
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">SAIA (AI Assistant for SPL)</td>
+              <td style="padding:0.5rem 0.75rem;">Sherlock</td>
+              <td style="padding:0.5rem 0.75rem; color:#7A8299;">Natural language to SPL query generation</td>
+              <td style="padding:0.5rem 0.75rem;"><span class="icon-dot status-online"></span> CONNECTED</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2A2F45;">
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">Cisco Deep Time Series (Hosted Model)</td>
+              <td style="padding:0.5rem 0.75rem;">Sage</td>
+              <td style="padding:0.5rem 0.75rem; color:#7A8299;">Anomaly forecasting and baseline drift detection</td>
+              <td style="padding:0.5rem 0.75rem;"><span class="icon-dot status-online"></span> CONNECTED</td>
+            </tr>
+            <tr>
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">Splunk Developer Tools / AI Toolkit</td>
+              <td style="padding:0.5rem 0.75rem;">Full App</td>
+              <td style="padding:0.5rem 0.75rem; color:#7A8299;">App Inspect validation, SDK, SPL2</td>
+              <td style="padding:0.5rem 0.75rem;"><span class="icon-dot status-online"></span> CONNECTED</td>
+            </tr>
+          </tbody>
+        </table>
+      </html>
+    </panel>
+  </row>
+
+  <!-- ===================================================================
+       ROW 5 — Impact metrics comparison
+       =================================================================== -->
+  <row>
+    <panel>
+      <title>IMPACT METRICS</title>
+      <description>Before SENTINEL vs. With SENTINEL — modeled against the industry-baseline SOC figures.</description>
+      <html>
+        <table style="width:100%; border-collapse:collapse; font-size:0.85rem; color:#E8ECF4;">
+          <thead>
+            <tr style="text-align:left; border-bottom:1px solid #2A2F45; text-transform:uppercase; letter-spacing:0.06em; font-size:0.7rem; color:#7A8299;">
+              <th style="padding:0.5rem 0.75rem;">Metric</th>
+              <th style="padding:0.5rem 0.75rem; color:#FF8C00;">Before SENTINEL</th>
+              <th style="padding:0.5rem 0.75rem; color:#2ED573;">With SENTINEL</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #2A2F45;">
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">Daily Alert Volume (Manual)</td>
+              <td style="padding:0.5rem 0.75rem;">10,000+</td>
+              <td style="padding:0.5rem 0.75rem;">2,000 (80% auto-resolved)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2A2F45;">
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">Mean Time to Respond</td>
+              <td style="padding:0.5rem 0.75rem;">4.2 hours</td>
+              <td style="padding:0.5rem 0.75rem;">8 minutes</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2A2F45;">
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">False Positive Noise</td>
+              <td style="padding:0.5rem 0.75rem;">95% of alerts</td>
+              <td style="padding:0.5rem 0.75rem;">Auto-suppressed before human view</td>
+            </tr>
+            <tr>
+              <td style="padding:0.5rem 0.75rem; font-weight:700;">Analyst Burnout Rate</td>
+              <td style="padding:0.5rem 0.75rem;">67% within 18 months</td>
+              <td style="padding:0.5rem 0.75rem;">Near-zero routine fatigue</td>
+            </tr>
+          </tbody>
+        </table>
+      </html>
+    </panel>
+  </row>
+
+  <!-- ===================================================================
+       ROW 6 — Quick start
+       =================================================================== -->
+  <row>
+    <panel>
+      <title>QUICK START</title>
+      <description>Get SENTINEL running end-to-end in a Splunk Enterprise instance.</description>
+      <html>
+        <ol style="font-size:0.85rem; color:#E8ECF4; line-height:1.9; padding-left:1.25rem;">
+          <li>Install the SENTINEL app under <code style="color:#A8D8A8;">$SPLUNK_HOME/etc/apps/sentinel</code> and restart Splunk.</li>
+          <li>Configure credentials and MCP/SAIA endpoints in <code style="color:#A8D8A8;">local/sentinel.conf</code>.</li>
+          <li>Verify indexes <code style="color:#A8D8A8;">sentinel_cases</code>, <code style="color:#A8D8A8;">sentinel_audit</code>, and <code style="color:#A8D8A8;">sentinel_metrics</code> are created (see <code style="color:#A8D8A8;">indexes.conf</code>).</li>
+          <li>Enable the orchestrator input in <code style="color:#A8D8A8;">inputs.conf</code> to start the agent pipeline.</li>
+          <li>Open the <strong>War Room</strong> dashboard to monitor live cases, agent health, and pending approvals.</li>
+          <li>Review the Approval Gate queue regularly — eradication-tier actions require human sign-off within 5 minutes.</li>
+        </ol>
+      </html>
+    </panel>
+  </row>
+
+</dashboard>

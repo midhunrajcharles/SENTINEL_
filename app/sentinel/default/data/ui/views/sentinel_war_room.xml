@@ -15,7 +15,7 @@
 
   <row>
     <panel>
-      <title>🚨 ACTIVE THREATS</title>
+      <title>ACTIVE THREATS</title>
       <description>Count of all open cases (status not CLOSED), with trend versus the prior hour. Turns red above 10 concurrent cases — a staffing/escalation signal for the SOC lead.</description>
       <single>
         <search>
@@ -41,7 +41,7 @@
     </panel>
 
     <panel>
-      <title>🤖 AUTONOMOUS RESOLUTION RATE</title>
+      <title>AUTONOMOUS RESOLUTION RATE</title>
       <description>Percentage of closed cases resolved without human intervention (autonomous=true / total closed). Gold above 80% reflects a mature, trusted autonomy posture; red below 50% signals the model needs retraining or thresholds need tuning.</description>
       <chart>
         <search>
@@ -59,15 +59,15 @@
         <option name="charting.chart">fillerGauge</option>
         <option name="charting.chart.rangeValues">[0,50,80,100]</option>
         <option name="charting.chart.style">minimal</option>
-        <option name="charting.fieldColors">{"resolution_rate":#D4AF37}</option>
-        <option name="charting.gaugeColors">[#DC4E41,#F8BE34,#D4AF37]</option>
+        <option name="charting.fieldColors">{"resolution_rate":#FFC312}</option>
+        <option name="charting.gaugeColors">[#FF1744,#FFC312,#2ED573]</option>
         <option name="refresh.display">progressbar</option>
         <option name="drilldown">none</option>
       </chart>
     </panel>
 
     <panel>
-      <title>⚡ MEAN TIME TO RESPOND</title>
+      <title>MEAN TIME TO RESPOND</title>
       <description>Average minutes from case creation to closure over the last hour. Target SLA is under 10 minutes — green when met, red when SENTINEL is falling behind the autonomous-response SLA.</description>
       <single>
         <search>
@@ -95,7 +95,7 @@
     </panel>
 
     <panel>
-      <title>🚨 DEAD LETTER QUEUE</title>
+      <title>DEAD LETTER QUEUE</title>
       <description>Cases that exhausted all retries and were parked for human review. Any non-zero count requires immediate SOC-lead attention — click to drill into the affected cases.</description>
       <single>
         <search>
@@ -124,8 +124,8 @@
 
   <row>
     <panel>
-      <title>🤖 AGENT HEALTH STATUS</title>
-      <description>Live status of all four SENTINEL agents — Vanguard (triage), Sherlock (investigation), Executor (response), and Sage (learning). Status is classified with Splunk's native rangemap command and color-coded with a status dot.</description>
+      <title>AGENT HEALTH STATUS</title>
+      <description>Live status of all four SENTINEL agents — Vanguard (triage), Sherlock (investigation), Executor (response), and Sage (learning). Status is classified with Splunk's native rangemap command and color-coded with a status cell (no icons).</description>
       <table>
         <search>
           <query>
@@ -138,14 +138,13 @@
             | fields agent_name events last_seen success_ratio
             | eval health_score=case(isnull(events) OR events=0, 0, success_ratio>=0.95, 100, success_ratio>=0.75, 60, true(), 30)
             | rangemap field=health_score low=0-30 elevated=31-70 severe=71-100
-            | eval status=case(range="severe","Online", range="elevated","Degraded", true(),"Offline")
-            | eval status_dot=case(status="Online","🟢 Online", status="Degraded","🟡 Degraded", true(),"🔴 Offline")
+            | eval status=case(range="severe","ONLINE", range="elevated","DEGRADED", true(),"OFFLINE")
             | eval last_seen=if(isnull(last_seen),"never",strftime(last_seen,"%Y-%m-%d %H:%M:%S"))
             | eval success_rate=round(success_ratio*100,1)
             | eval queue_depth=floor(random() % 5)
             | eval agent_label=case(agent_name="vanguard","Vanguard (Triage)", agent_name="sherlock","Sherlock (Investigation)", agent_name="executor","Executor (Response)", agent_name="sage","Sage (Learning)", true(),agent_name)
-            | table agent_label status_dot last_seen success_rate queue_depth status
-            | rename agent_label as Agent, status_dot as Status, last_seen as "Last Seen", success_rate as "Success Rate %", queue_depth as "Queue Depth"
+            | table agent_label status last_seen success_rate queue_depth
+            | rename agent_label as Agent, status as Status, last_seen as "Last Seen", success_rate as "Success Rate %", queue_depth as "Queue Depth"
           </query>
           <earliest>-15m</earliest>
           <latest>now</latest>
@@ -158,10 +157,10 @@
         <option name="wrap">true</option>
         <fields>["Agent","Status","Last Seen","Success Rate %","Queue Depth"]</fields>
         <format type="color" field="Status">
-          <colorPalette type="map">{"🟢 Online":#65A637,"🟡 Degraded":#F8BE34,"🔴 Offline":#DC4E41}</colorPalette>
+          <colorPalette type="map">{"ONLINE":#2ED573,"DEGRADED":#FFC312,"OFFLINE":#FF1744}</colorPalette>
         </format>
         <format type="color" field="Success Rate %">
-          <colorPalette type="list">[#DC4E41,#F8BE34,#65A637]</colorPalette>
+          <colorPalette type="list">[#FF1744,#FFC312,#2ED573]</colorPalette>
           <scale type="threshold">[75,95]</scale>
         </format>
       </table>
@@ -170,7 +169,7 @@
 
   <row>
     <panel>
-      <title>📊 LIVE CASE QUEUE</title>
+      <title>LIVE CASE QUEUE</title>
       <description>All cases currently in the autonomous pipeline, ranked by risk score. Row priority is color-coded (CRITICAL/HIGH/MEDIUM/LOW) based on the same thresholds Vanguard uses to route cases. Click any row to drill into full case details.</description>
       <table>
         <search>
@@ -190,7 +189,7 @@
         <option name="count">15</option>
         <option name="wrap">false</option>
         <format type="color" field="priority">
-          <colorPalette type="map">{"CRITICAL":#DC4E41,"HIGH":#F1813F,"MEDIUM":#F8BE34,"LOW":#65A637}</colorPalette>
+          <colorPalette type="map">{"CRITICAL":#FF1744,"HIGH":#FF8C00,"MEDIUM":#FFC312,"LOW":#2ED573}</colorPalette>
         </format>
         <drilldown>
           <link target="_blank">/app/sentinel/sentinel_case_details?form.case_id=$row.case_id$</link>
@@ -199,7 +198,7 @@
     </panel>
 
     <panel>
-      <title>🚨 PENDING APPROVALS</title>
+      <title>PENDING APPROVALS</title>
       <description>Eradication-tier actions awaiting human sign-off via the ApprovalGate. Time remaining counts down from the request's logged timestamp toward the default 5-minute fail-safe-deny window — rows under 2 minutes turn red and need an immediate Approve/Deny decision from the on-call analyst.</description>
       <table>
         <search>
@@ -220,7 +219,7 @@
         <option name="refresh.display">progressbar</option>
         <option name="count">10</option>
         <format type="color" field="time_remaining">
-          <colorPalette type="list">[#DC4E41,#F8BE34,#65A637]</colorPalette>
+          <colorPalette type="list">[#FF1744,#FFC312,#2ED573]</colorPalette>
           <scale type="threshold">[2,4]</scale>
         </format>
         <drilldown>
@@ -232,7 +231,7 @@
 
   <row>
     <panel>
-      <title>📊 MTTR TREND (24H)</title>
+      <title>MTTR TREND (24H)</title>
       <description>Rolling average Mean-Time-To-Respond across the last 24 hours, plotted alongside the 240-minute (4-hour) industry-baseline reference line for autonomous SOC response. SENTINEL consistently undercuts the baseline by an order of magnitude.</description>
       <chart>
         <search>
@@ -249,7 +248,7 @@
         </search>
         <option name="charting.chart">line</option>
         <option name="charting.chart.nullValueMode">connect</option>
-        <option name="charting.fieldColors">{"MTTR":#5DBDFF,"Industry Baseline":#DC4E41}</option>
+        <option name="charting.fieldColors">{"MTTR":#4D96FF,"Industry Baseline":#FF1744}</option>
         <option name="charting.fieldDashStyles">{"Industry Baseline":"dash"}</option>
         <option name="charting.legend.placement">bottom</option>
         <option name="charting.axisTitleY.text">Minutes</option>
@@ -259,7 +258,7 @@
     </panel>
 
     <panel>
-      <title>📊 THREAT VOLUME</title>
+      <title>THREAT VOLUME</title>
       <description>Stacked, 24-hour rolling view of incoming case volume broken down by classification — surfaces emerging campaigns and shifts in the threat landscape at a glance.</description>
       <chart>
         <search>

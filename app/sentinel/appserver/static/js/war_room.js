@@ -175,6 +175,8 @@ async function fetchAll() {
       // agent_status.js handles rendering
       if (window.AgentStatus) window.AgentStatus.update(agentStats.value);
       renderAgentDegradation(agentStats.value);
+      // agent_visualization.js handles the threat gauge + agent network graph
+      if (window.AgentVisualization) window.AgentVisualization.update(agentStats.value, STATE.cases);
     }
     if (approvals.status === 'fulfilled') {
       STATE.approvals = approvals.value.pending || [];

@@ -18,9 +18,30 @@
    CSS custom properties (variables)
    ========================================================================= */
 :root {
+  /* Red gradient grade — SENTINEL primary identity. Used sparingly for
+     danger/urgency: header bar, emergency halt, critical threat indicators,
+     active-alert borders. Everything else stays on the functional palette. */
+  --sentinel-red-bright:    #FF1744;
+  --sentinel-red-mid-bright:#D50032;
+  --sentinel-red-mid:       #B71C2E;
+  --sentinel-red-mid-dark:  #8B0A1A;
+  --sentinel-red-dark:      #5C0011;
+  --sentinel-red-darkest:   #2D0008;
+
+  /* Functional accent colours (subordinate to red) */
+  --sentinel-orange: #FF8C00;
+  --sentinel-blue:   #4D96FF;
+  --sentinel-green:  #2ED573;
+  --sentinel-purple: #A855F7;
+  --sentinel-gold:   #FFC312;
+
   /* Background layers */
-  --bg-root:         #060b14;   /* page background */
-  --bg-panel:        #0d1520;   /* panel / card surface */
+  --sentinel-bg:     #0B0E17;   /* page background */
+  --sentinel-surface: #141824;  /* panel / card surface */
+  --sentinel-surface-hover: #1C2033;
+  --sentinel-border: #2A2F45;
+  --bg-root:         var(--sentinel-bg);     /* page background */
+  --bg-panel:        var(--sentinel-surface); /* panel / card surface */
   --bg-panel-alt:    #111d2e;   /* alternating rows, inner panels */
   --bg-header:       #081020;   /* top nav bar */
   --bg-input:        #0a1624;
@@ -32,8 +53,10 @@
   --border-focus:    #2d7ef7;
 
   /* Text */
-  --text-primary:    #e8edf5;
-  --text-secondary:  #8fa3bf;
+  --sentinel-text-primary:   #E8ECF4;
+  --sentinel-text-secondary: #7A8299;
+  --text-primary:    var(--sentinel-text-primary);
+  --text-secondary:  var(--sentinel-text-secondary);
   --text-muted:      #4a6080;
   --text-code:       #a8d8a8;
   --text-link:       #4da6ff;
@@ -136,7 +159,12 @@ a:hover { text-decoration: underline; }
   gap: 1rem;
   padding: 0 1.5rem;
   height: 56px;
-  background: var(--bg-header);
+  background: linear-gradient(90deg,
+    var(--sentinel-red-darkest) 0%,
+    var(--sentinel-red-dark) 30%,
+    var(--sentinel-red-mid-dark) 50%,
+    var(--sentinel-red-dark) 70%,
+    var(--sentinel-red-darkest) 100%);
   border-bottom: 1px solid var(--border-subtle);
   box-shadow: 0 2px 16px rgba(0,0,0,0.6);
 }
@@ -611,6 +639,12 @@ a:hover { text-decoration: underline; }
 .agent-card:hover { border-color: var(--border-active); }
 .agent-card.active { animation: pulse-card 2s infinite; }
 
+/* Agent actively processing a CRITICAL-severity case — red gradient glow */
+.agent-card.critical-active {
+  border-color: var(--sentinel-red-mid);
+  box-shadow: 0 0 20px rgba(255, 23, 68, 0.15);
+}
+
 .agent-card-header {
   display: flex;
   align-items: center;
@@ -760,6 +794,37 @@ a:hover { text-decoration: underline; }
   border-color: rgba(255, 68, 68, 0.4);
 }
 .btn-halt:hover { background: rgba(255,68,68,0.3); border-color: var(--critical); box-shadow: 0 0 12px var(--critical-glow); }
+
+/* Global emergency halt — the red-gradient "big red button" */
+.btn-emergency-halt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.1rem;
+  border-radius: var(--radius-md);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #fff;
+  border: 1px solid var(--sentinel-red-bright);
+  background: linear-gradient(135deg, var(--sentinel-red-bright), var(--sentinel-red-mid-bright));
+  box-shadow: 0 0 30px rgba(255, 23, 68, 0.3);
+  cursor: pointer;
+  transition: filter var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.btn-emergency-halt:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 0 40px rgba(255, 23, 68, 0.5);
+}
+
+.btn-emergency-halt:disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+  box-shadow: none;
+}
 
 .btn-escalate {
   background: var(--high-dim);
@@ -987,6 +1052,232 @@ a:hover { text-decoration: underline; }
 
 .loading-dot:nth-child(2) { animation-delay: 0.2s; }
 .loading-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* =========================================================================
+   No-emoji status icons — CSS shapes / text labels in place of emoji
+   ========================================================================= */
+.icon-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.icon-dot.threat-critical { background: var(--sentinel-red-bright); box-shadow: 0 0 6px var(--sentinel-red-bright); animation: pulse-dot 0.8s infinite; }
+.icon-dot.threat-high     { background: var(--high); }
+.icon-dot.threat-medium   { background: var(--medium); }
+.icon-dot.threat-low      { background: var(--low); }
+.icon-dot.status-online   { background: var(--sentinel-green); box-shadow: 0 0 6px var(--sentinel-green); }
+.icon-dot.status-busy     { background: var(--sentinel-gold); }
+.icon-dot.status-offline  { background: var(--status-offline); }
+
+/* CSS shield shape — replaces a shield emoji for agent/branding marks */
+.icon-shield {
+  display: inline-block;
+  width: 14px;
+  height: 16px;
+  flex-shrink: 0;
+  background: currentColor;
+  clip-path: polygon(50% 0%, 100% 20%, 100% 55%, 50% 100%, 0% 55%, 0% 20%);
+  opacity: 0.85;
+}
+
+/* =========================================================================
+   Threat gauge — radial dial summarizing the global composite threat level
+   ========================================================================= */
+.threat-gauge-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.75rem;
+}
+
+.threat-gauge {
+  position: relative;
+  width: 140px;
+  height: 140px;
+}
+
+.threat-gauge svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+
+.threat-gauge-track {
+  fill: none;
+  stroke: var(--border-subtle);
+  stroke-width: 10;
+}
+
+.threat-gauge-fill {
+  fill: none;
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dasharray 600ms ease, stroke var(--transition-med);
+}
+
+.threat-gauge-fill.level-low      { stroke: var(--sentinel-green); }
+.threat-gauge-fill.level-medium   { stroke: var(--sentinel-gold); }
+.threat-gauge-fill.level-high     { stroke: var(--sentinel-orange); }
+.threat-gauge-fill.level-critical {
+  stroke: var(--sentinel-red-bright);
+  filter: drop-shadow(0 0 6px rgba(255, 23, 68, 0.6));
+}
+
+.threat-gauge-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.threat-gauge-score {
+  font-size: 2.1rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+
+.threat-gauge-score.level-low      { color: var(--sentinel-green); }
+.threat-gauge-score.level-medium   { color: var(--sentinel-gold); }
+.threat-gauge-score.level-high     { color: var(--sentinel-orange); }
+.threat-gauge-score.level-critical { color: var(--sentinel-red-bright); }
+
+.threat-gauge-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
+
+.threat-level-banner {
+  width: 100%;
+  text-align: center;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-primary);
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border-subtle);
+}
+
+.threat-level-banner.level-critical {
+  background: linear-gradient(135deg, var(--sentinel-red-mid-dark), var(--sentinel-red-mid-bright));
+  border-color: var(--sentinel-red-bright);
+  box-shadow: 0 0 24px rgba(255, 23, 68, 0.35);
+  animation: pulse-card 1.6s infinite;
+}
+
+.threat-level-banner.level-high     { border-color: var(--sentinel-orange); color: var(--sentinel-orange); }
+.threat-level-banner.level-medium   { border-color: var(--sentinel-gold);   color: var(--sentinel-gold); }
+.threat-level-banner.level-low      { border-color: var(--sentinel-green);  color: var(--sentinel-green); }
+
+/* =========================================================================
+   Agent network visualization — orchestrator hub + agent nodes
+   ========================================================================= */
+.agent-network {
+  width: 100%;
+  height: 220px;
+}
+
+.agent-network svg { width: 100%; height: 100%; }
+
+.an-link {
+  stroke: var(--border-active);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.an-link.active {
+  stroke: var(--sentinel-blue);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+  animation: an-flow 1s linear infinite;
+}
+
+.an-link.critical {
+  stroke: var(--sentinel-red-bright);
+  animation: an-flow 0.6s linear infinite;
+}
+
+.an-node circle {
+  fill: var(--bg-panel-alt);
+  stroke: var(--border-active);
+  stroke-width: 1.5;
+}
+
+.an-node.online circle    { stroke: var(--sentinel-green); }
+.an-node.busy circle      { stroke: var(--sentinel-gold); }
+.an-node.critical circle  { stroke: var(--sentinel-red-bright); filter: drop-shadow(0 0 8px rgba(255,23,68,0.5)); }
+.an-node.offline circle   { stroke: var(--status-offline); opacity: 0.6; }
+
+.an-node.pulse circle.an-pulse-ring {
+  fill: none;
+  stroke-width: 2;
+  animation: an-pulse 1.6s ease-out infinite;
+}
+
+.an-node text {
+  fill: var(--text-primary);
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.an-node .an-sub {
+  fill: var(--text-muted);
+  font-size: 7px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* =========================================================================
+   MCP tool call log — orange accent (MCP = orange convention)
+   ========================================================================= */
+.mcp-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mcp-log-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-panel-alt);
+  border-left: 3px solid var(--sentinel-orange);
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  animation: slide-in 200ms ease;
+}
+
+.mcp-log-entry.error  { border-left-color: var(--sentinel-red-bright); }
+.mcp-log-entry .mcp-time { font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); white-space: nowrap; }
+.mcp-log-entry .mcp-tool { font-weight: 700; color: var(--sentinel-orange); white-space: nowrap; }
+.mcp-log-entry .mcp-target { flex: 1; font-family: var(--font-mono); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-log-entry .mcp-status { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.mcp-log-entry .mcp-status.ok    { color: var(--sentinel-green); }
+.mcp-log-entry .mcp-status.error { color: var(--sentinel-red-bright); }
+
+@keyframes an-flow {
+  to { stroke-dashoffset: -14; }
+}
+
+@keyframes an-pulse {
+  0%   { r: 22; stroke-opacity: 0.6; }
+  100% { r: 36; stroke-opacity: 0; }
+}
 
 /* =========================================================================
    Utility classes

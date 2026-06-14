@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<nav search_view="search">
+<nav search_view="search" color="#5C0011">
   <view name="sentinel_war_room" default="true" label="War Room"/>
-  <view name="sentinel_performance" label="Performance"/>
+  <view name="sentinel_overview" label="Overview"/>
   <collection label="Details">
+    <view name="sentinel_performance" label="Performance"/>
     <view name="sentinel_case_details" label="Case Details"/>
   </collection>
+  <a href="search" target="_blank">Search</a>
+  <a href="/app/sentinel/search?q=search%20index%3Dsentinel_cases%20status%21%3DCLOSED%20%7C%20sort%20-risk_score&amp;earliest=-24h&amp;latest=now" target="_blank">Alerts</a>
+  <a href="manager/sentinel/apps/local/sentinel" target="_blank">Settings</a>
 </nav>
