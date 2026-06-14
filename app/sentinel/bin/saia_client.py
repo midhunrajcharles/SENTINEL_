@@ -45,6 +45,7 @@ _CACHE_PATH = Path(__file__).resolve().parent.parent / "lookups" / "saia_cached_
 _TEMPLATE_DEFAULTS = {
     "earliest": "-24h",
     "latest":   "now",
+    "host":     "WORKSTATION-07",
 }
 
 _PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
