@@ -1,45 +1,41 @@
 # SENTINEL: Autonomous Agentic SOC Commander
 
 <p align="center">
-  <img src="docs/screenshots/dashboard_overview.png" alt="SENTINEL Dashboard" width="800"/>
+  <img src="docs/screenshots/dashboard_overview.png" alt="SENTINEL Dashboard" width="900"/>
 </p>
 
 <p align="center">
-  <a href="docs/VIDEO_SCRIPT.md"><img src="https://img.shields.io/badge/Demo-Walkthrough-red"/></a>
-  <a href="https://splunk.devpost.com"><img src="https://img.shields.io/badge/Hackathon-Splunk%20Agentic%20Ops%202026-green"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue"/></a>
-  <img src="https://img.shields.io/badge/Python-3.9%2B-blue"/>
-  <img src="https://img.shields.io/badge/Splunk-10.4%2B-orange"/>
+  <a href="docs/VIDEO_SCRIPT.md"><img src="https://img.shields.io/badge/Demo-Walkthrough-red?style=for-the-badge"/></a>
+  <a href="https://splunk.devpost.com"><img src="https://img.shields.io/badge/Hackathon-Splunk%20Agentic%20Ops%202026-green?style=for-the-badge"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge"/></a>
 </p>
-
----
 
 ## Overview
 
-> **"While your analysts sleep, SENTINEL hunts."**
+SENTINEL is an autonomous, multi-agent SOC commander built on Splunk's native AI stack. Four specialized agents — **Vanguard**, **Sherlock**, **Executor**, and **Sage** — run a continuous OODA loop (observe, orient, decide, act) with human override at every stage.
 
-SENTINEL is an architecture proposal and functional proof-of-concept for an autonomous, multi-agent SOC commander built on Splunk's native AI stack. Four specialized agents — **Vanguard**, **Sherlock**, **Executor**, and **Sage** — run the incident response lifecycle end to end (observe, reason, act, learn), with human override available at every stage.
+> **While your analysts sleep, SENTINEL hunts.**
 
-**CURRENT STATUS:** Proof-of-concept with a local simulation backend. All Splunk integration points are coded and ready — see [docs/SPLUNK_INTEGRATION.md](docs/SPLUNK_INTEGRATION.md) for proof of each integration point and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the path to a real Splunk Cloud/Enterprise deployment (~4 hours).
-
----
+**CURRENT STATUS:** Functional proof-of-concept with a local simulation backend (`start_live_stack.py`). All Splunk integration points are coded and ready — see [docs/SPLUNK_INTEGRATION.md](docs/SPLUNK_INTEGRATION.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the path to Splunk Cloud/Enterprise (~4 hours).
 
 ## The Problem
 
-Modern SOCs are drowning. 10,000+ alerts daily. ~95% are false positives. Analysts spend ~45 minutes per alert. 67% burn out within 18 months. Mean Time to Respond hovers around 4.2 hours.
+- 10,000+ alerts flood SOCs every night
+- ~95% of those alerts are false positives
+- 4.2 hours average response time
+- 67% analyst burnout within 18 months
+- ~$3.2M annual SOC cost per enterprise
 
 ## The Solution
 
-SENTINEL's risk-matrix-gated agent swarm triages, investigates, responds, and learns continuously. The numbers below are live output from the local simulation stack (`start_live_stack.py`), not production measurements:
+These are the design targets SENTINEL's risk-matrix and agent thresholds are built around. The right-hand column is live output from the local simulation stack — not a production measurement.
 
-| Metric | Design Target | Live Simulation |
-|--------|---------------|-----------------|
-| Mean Time to Respond | 8 minutes | ~1.6 minutes |
-| Autonomous Resolution | 80%+ | 96% |
-| False Positive Rate | Auto-suppressed | 0% |
-| Threats Contained (sample run) | — | 24 |
-
----
+| Metric | Before SENTINEL | Design Target | Live Simulation |
+|--------|------------------|----------------|------------------|
+| Mean Time to Respond | 4.2 hours | 8 minutes | ~1.6 minutes |
+| Autonomous Resolution | 0% | 80%+ | 96% |
+| False Positive Rate | ~95% of alerts | Auto-suppressed | 0% |
+| Analyst Burnout | 67% within 18 months | Near-zero | — |
 
 ## Architecture
 
@@ -48,30 +44,40 @@ SENTINEL's risk-matrix-gated agent swarm triages, investigates, responds, and le
 </p>
 
 ### Data Flow
-1. **Data Sources** (EDR, Network, Identity, Cloud) → Splunk Enterprise
-2. **Splunk Enterprise** → ES Notables, CIM indexes, KV Store, HEC
-3. **Splunk MCP Server** → central nervous system for agent ↔ Splunk communication (14 tools, JSON-RPC 2.0)
-4. **Agent Swarm** → Vanguard → Sherlock → Executor → Sage
-5. **Outputs** → Human override / approval gate, audit trail (`sentinel_audit` index), external integrations (VirusTotal/AbuseIPDB, ServiceNow/Jira)
 
----
+1. **Data Sources** (EDR, Firewall, Identity, Cloud, Threat Intel) → Splunk Enterprise
+2. **Splunk Platform** → Enterprise Security, CIM indexes, KV Store, HEC
+3. **Splunk AI Stack** → MCP Server, SAIA, AI Toolkit, Foundation-Sec, Cisco Deep Time Series
+4. **SENTINEL Agent Swarm** → Vanguard → Sherlock → Executor → Sage
+5. **Outputs** → Isolate / block / disable actions, audit trail, human override gate, ticketing (ServiceNow/Jira)
 
-## The Agent Swarm
+## The Agents
 
-| Agent | Role | Model | Key Capability |
-|-------|------|-------|---------------|
-| **Vanguard** | Triage | Foundation-Sec-8B | Zero-shot threat classification with composite risk scoring |
-| **Sherlock** | Investigation | SAIA + MCP Server | Multi-hop forensic analysis across 47+ data sources |
-| **Executor** | Response | MCP + SOAR | Risk-gated autonomous remediation with rollback timers |
-| **Sage** | Learning | Cisco Deep Time Series | Self-tuning detection rules and anomaly forecasting |
+### Vanguard (Triage Agent)
+- Scores alerts in seconds using Foundation-Sec-8B
+- Composite risk score 0–100
+- Decision: dismiss / queue for investigation / escalate
 
----
+### Sherlock (Investigation Agent)
+- 4-phase deep-dive across endpoint, network, identity, and threat-intel data
+- Process tree, network flow, and lateral-movement analysis
+- Blast radius mapping
+
+### Executor (Response Agent)
+- Isolate host, block IP, disable account
+- Risk-matrix-gated execution with auto-rollback timer
+- Verification query confirms the action took effect
+
+### Sage (Learning Agent)
+- Proposes new detection rules from closed cases
+- Extracts IOCs into threat intel
+- Auto-tunes Vanguard's risk thresholds
 
 ## Splunk AI Integration
 
 | Splunk AI Capability | Agent | Function | Status |
 |---------------------|-------|----------|--------|
-| **Splunk MCP Server** | All agents | Central nervous system for agent-Splunk communication | Coded, requires Splunk backend |
+| **Splunk MCP Server** | All agents | Central nervous system for agent-Splunk communication (14 tools) | Coded, requires Splunk backend |
 | **Foundation-Sec-8B** (Hosted Model) | Vanguard | Zero-shot threat classification | Coded, requires Splunk backend |
 | **SAIA** (AI Assistant for SPL) | Sherlock | Natural language to SPL generation | Coded, requires Splunk backend |
 | **Cisco Deep Time Series** (Hosted Model) | Sage | Anomaly forecasting and baseline drift detection | Coded, requires Splunk backend |
@@ -79,56 +85,59 @@ SENTINEL's risk-matrix-gated agent swarm triages, investigates, responds, and le
 
 See [docs/SPLUNK_INTEGRATION.md](docs/SPLUNK_INTEGRATION.md) for exact endpoints, request/response formats, and the status of each integration.
 
----
-
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/kill_chain.png" alt="Kill Chain" width="800"/>
-  <br/><i>Kill Chain Visualization — Alert → Vanguard → Sherlock → Executor → Sage → Closed</i>
+  <img src="docs/screenshots/kill_chain.png" alt="Kill Chain" width="900"/>
+  <br/><i>Kill Chain: Alert → Vanguard → Sherlock → Executor → Sage → Closed</i>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/why_sentinel_wins.png" alt="Why SENTINEL Wins" width="800"/>
-  <br/><i>Competitive Differentiation</i>
+  <img src="docs/screenshots/agent_status.png" alt="Agent Status" width="900"/>
+  <br/><i>Four specialized agents operating in real-time</i>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/agent_status.png" alt="Agent Status" width="800"/>
-  <br/><i>Live Agent Status</i>
+  <img src="docs/screenshots/response_actions.png" alt="Response Actions" width="900"/>
+  <br/><i>Executor: automated containment action with before/after state and rollback timer</i>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/metrics.png" alt="Metrics" width="800"/>
-  <br/><i>Performance Metrics (live simulation)</i>
+  <img src="docs/screenshots/why_sentinel_wins.png" alt="Why SENTINEL Wins" width="900"/>
+  <br/><i>Competitive differentiation: autonomy vs. assistance</i>
 </p>
 
----
+<p align="center">
+  <img src="docs/screenshots/metrics.png" alt="Metrics" width="900"/>
+  <br/><i>Live performance metrics from the simulation</i>
+</p>
 
 ## Tech Stack
 
-- **Python 3.12** — Agent orchestration
-- **Splunk SDK** — REST integration
-- **Splunk MCP Server** — Bidirectional tools
-- **SAIA** — Natural language to SPL
-- **Foundation-Sec-8B** — Threat classification
+- **Python 3.12** — Agent orchestration, API server
+- **Splunk SDK for Python** — REST API integration
+- **Splunk MCP Server** — Bidirectional tool execution
+- **SAIA (Splunk AI Assistant)** — Natural language to SPL generation
+- **Foundation-Sec-8B Hosted Model** — Threat classification
 - **Cisco Deep Time Series** — Anomaly forecasting
-- **Splunk AI Toolkit** — App Inspect / SPL2 validation
+- **Splunk AI Toolkit** — Agent orchestration / App Inspect / SPL2
 - **SQLite** — Local simulation backend
-- **HTML5/CSS3/JS** — Live war room dashboard
-
----
+- **HTML5 + CSS3 + JavaScript** — War room dashboard
+- **WebSocket** — Real-time live updates
 
 ## Installation & Quick Start
 
 **Local simulation (works today, no Splunk required):**
 
 ```bash
-git clone git@github-midhun:midhunrajcharles/SENTINEL.git
+git clone https://github.com/midhunrajcharles/SENTINEL.git
 cd SENTINEL
+
+# Install dependencies
 pip install -r app/sentinel/lib/requirements.txt
 
-# Start the full live stack (database, data generators, agents, API + WebSocket server)
+# Start the full live stack: database, data generators, agent
+# orchestrator (Vanguard/Sherlock/Executor/Sage), and API/WebSocket server
 python start_live_stack.py --reset
 ```
 
@@ -138,15 +147,61 @@ Then open the dashboard:
 http://localhost:9090/demo/sentinel_war_room_live.html
 ```
 
-**Production deployment on Splunk Cloud / Enterprise:** see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (~4 hours, end to end).
+**Production deployment on Splunk Cloud / Enterprise:** configure `app/sentinel/local/sentinel.conf` with your Splunk host, credentials, and API token, then follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (~4 hours, end to end).
 
----
+## Project Structure
 
-## Demo
+```
+SENTINEL/
+├── app/
+│   └── sentinel/
+│       ├── bin/                    # Agent orchestration & tools
+│       │   ├── sentinel_orchestrator.py
+│       │   ├── agent_vanguard.py
+│       │   ├── agent_sherlock.py
+│       │   ├── agent_executor.py
+│       │   ├── agent_sage.py
+│       │   ├── mcp_client.py
+│       │   ├── saia_client.py
+│       │   ├── hosted_model_client.py
+│       │   ├── threat_intel_enricher.py
+│       │   ├── audit_logger.py
+│       │   └── utils/
+│       ├── local/                  # Configuration (gitignored)
+│       │   └── sentinel.conf
+│       └── lib/                    # Dependencies
+│           └── requirements.txt
+├── demo/                           # Live war room dashboard + API server
+│   ├── sentinel_war_room_live.html
+│   ├── splunk_api_server.py
+│   └── start_dashboard_server.py
+├── docs/                           # Documentation & screenshots
+│   ├── screenshots/
+│   └── architecture_diagram.png
+├── scripts/                        # Setup & utilities
+│   ├── setup_splunk_cloud.py
+│   ├── inject_synthetic_attack_data.py
+│   └── verify_integration.py
+├── start_live_stack.py             # Master launcher for the local stack
+├── README.md
+└── LICENSE
+```
 
-See [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md) for the recording outline — an honest walkthrough of what runs today vs. what's coded-and-waiting for a Splunk backend.
+## Key Features
 
----
+- **Autonomous OODA Loop** — Observe, Orient, Decide, Act with 4 specialized agents
+- **Human Override** — HALT freezes all agents instantly; approval gates for borderline decisions
+- **Chain of Thought** — Each agent's reasoning is logged and shown in the war room
+- **Blast Radius Mapping** — Real-time containment percentage with lateral-movement tracking
+- **Fault Tolerance** — Dead-letter queue, circuit breaker, exponential backoff (`mcp_client.py`)
+- **CIM Compliant** — Splunk Common Information Model compatible
+- **Append-only Audit Trail** — Every agent decision logged to the `sentinel_audit` index (HEC, with JSONL fallback)
+
+## Simulation Mode
+
+This demo uses a local SQLite-backed simulation stack that mirrors the shape of Splunk's APIs. All production integration code (MCP, SAIA, hosted models) is implemented and ready for deployment to a live Splunk Cloud or Enterprise instance — see [docs/SPLUNK_INTEGRATION.md](docs/SPLUNK_INTEGRATION.md).
+
+**Deployment time to production Splunk:** ~4 hours with credentials, per [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Team
 
@@ -154,19 +209,13 @@ See [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md) for the recording outline — a
 |------|------|-------|
 | Midhun Raj | Creator & Developer | midhunraj.27it@licet.ac.in |
 
----
-
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE)
 
----
-
-## Documentation
-
-See [docs/](docs/) for detailed setup guides, API reference, and troubleshooting.
-
 ## Acknowledgments
 
 - Splunk Agentic Ops Hackathon 2026
-- Built with Splunk's native AI stack
+- Built with Splunk's native AI stack: MCP Server, SAIA, Foundation-Sec, Cisco Deep Time Series, AI Toolkit
+
+> *Past winners built copilots. SENTINEL built a workforce.*

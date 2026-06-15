@@ -21,11 +21,16 @@ def main() -> None:
         # Let the WebSocket connect and populate live data.
         page.wait_for_timeout(4000)
 
-        # Click the first case in the queue to open the investigation view.
-        first_case = page.locator("#case-queue .case-card").first
-        if first_case.count() > 0:
-            first_case.click()
-            page.wait_for_timeout(2000)
+        # Click through cases until one with completed response actions is shown.
+        cases = page.locator("#case-queue .case-card")
+        for i in range(min(cases.count(), 10)):
+            cases.nth(i).click()
+            page.wait_for_timeout(800)
+            panel = page.locator(
+                "#investigation-body .panel:has(.panel-title:text('Response Actions'))"
+            ).first
+            if panel.count() > 0 and "Awaiting" not in (panel.inner_text() or ""):
+                break
 
         page.screenshot(path=f"{OUT}/dashboard_overview.png", full_page=False)
 
@@ -56,6 +61,15 @@ def main() -> None:
             metrics.scroll_into_view_if_needed()
             page.wait_for_timeout(500)
             metrics.screenshot(path=f"{OUT}/metrics.png")
+
+        # "Response Actions" panel in the center investigation column.
+        response_panel = page.locator(
+            "#investigation-body .panel:has(.panel-title:text('Response Actions'))"
+        ).first
+        if response_panel.count() > 0:
+            response_panel.scroll_into_view_if_needed()
+            page.wait_for_timeout(500)
+            response_panel.screenshot(path=f"{OUT}/response_actions.png")
 
         browser.close()
 
