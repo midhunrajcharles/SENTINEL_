@@ -4,11 +4,6 @@
   <img src="docs/screenshots/dashboard_overview.png" alt="SENTINEL Dashboard" width="900"/>
 </p>
 
-<p align="center">
-  <a href="docs/VIDEO_SCRIPT.md"><img src="https://img.shields.io/badge/Demo-Walkthrough-red?style=for-the-badge"/></a>
-  <a href="https://splunk.devpost.com"><img src="https://img.shields.io/badge/Hackathon-Splunk%20Agentic%20Ops%202026-green?style=for-the-badge"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge"/></a>
-</p>
 
 ## Overview
 
@@ -87,28 +82,51 @@ See [docs/SPLUNK_INTEGRATION.md](docs/SPLUNK_INTEGRATION.md) for exact endpoints
 
 ## Screenshots
 
+### Dashboard Overview
 <p align="center">
-  <img src="docs/screenshots/kill_chain.png" alt="Kill Chain" width="900"/>
-  <br/><i>Kill Chain: Alert → Vanguard → Sherlock → Executor → Sage → Closed</i>
+  <a href="docs/screenshots/dashboard_overview.png">
+    <img src="docs/screenshots/dashboard_overview.png" alt="SENTINEL Dashboard" width="100%"/>
+  </a>
+  <br/><i>SENTINEL War Room: live cases, kill chain, agents, metrics — click for full size</i>
 </p>
 
+### Kill Chain
 <p align="center">
-  <img src="docs/screenshots/agent_status.png" alt="Agent Status" width="900"/>
+  <a href="docs/screenshots/kill_chain.png">
+    <img src="docs/screenshots/kill_chain.png" alt="Kill Chain" width="100%"/>
+  </a>
+  <br/><i>5-stage kill chain: Alert → Vanguard → Sherlock → Executor → Sage → Closed</i>
+</p>
+
+### Agent Status
+<p align="center">
+  <a href="docs/screenshots/agent_status.png">
+    <img src="docs/screenshots/agent_status.png" alt="Agent Status" width="100%"/>
+  </a>
   <br/><i>Four specialized agents operating in real-time</i>
 </p>
 
+### Response Actions
 <p align="center">
-  <img src="docs/screenshots/response_actions.png" alt="Response Actions" width="900"/>
-  <br/><i>Executor: automated containment action with before/after state and rollback timer</i>
+  <a href="docs/screenshots/response_actions.png">
+    <img src="docs/screenshots/response_actions.png" alt="Response Actions" width="100%"/>
+  </a>
+  <br/><i>Automated containment: isolate host in 3.3s with blast radius mapping</i>
 </p>
 
+### Why SENTINEL Wins
 <p align="center">
-  <img src="docs/screenshots/why_sentinel_wins.png" alt="Why SENTINEL Wins" width="900"/>
-  <br/><i>Competitive differentiation: autonomy vs. assistance</i>
+  <a href="docs/screenshots/why_sentinel_wins.png">
+    <img src="docs/screenshots/why_sentinel_wins.png" alt="Why SENTINEL Wins" width="100%"/>
+  </a>
+  <br/><i>Autonomy vs. assistance — the competitive landscape</i>
 </p>
 
+### Performance Metrics
 <p align="center">
-  <img src="docs/screenshots/metrics.png" alt="Metrics" width="900"/>
+  <a href="docs/screenshots/metrics.png">
+    <img src="docs/screenshots/metrics.png" alt="Metrics" width="100%"/>
+  </a>
   <br/><i>Live performance metrics from the simulation</i>
 </p>
 
@@ -132,7 +150,6 @@ See [docs/SPLUNK_INTEGRATION.md](docs/SPLUNK_INTEGRATION.md) for exact endpoints
 ```bash
 git clone https://github.com/midhunrajcharles/SENTINEL.git
 cd SENTINEL
-
 # Install dependencies
 pip install -r app/sentinel/lib/requirements.txt
 
