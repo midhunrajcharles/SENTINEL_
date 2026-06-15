@@ -32,9 +32,9 @@ These are the design targets SENTINEL's risk-matrix and agent thresholds are bui
 
 | Metric | Before SENTINEL | Design Target | Live Simulation |
 |--------|------------------|----------------|------------------|
-| Mean Time to Respond | 4.2 hours | 8 minutes | ~1.6 minutes |
-| Autonomous Resolution | 0% | 80%+ | 96% |
-| False Positive Rate | ~95% of alerts | Auto-suppressed | 0% |
+| Mean Time to Respond | 4.2 hours | 8 minutes | ~1.8 minutes |
+| Autonomous Resolution | 0% | 80%+ | 96.1% |
+| False Positive Rate | ~95% of alerts | Auto-suppressed | 2.0% |
 | Analyst Burnout | 67% within 18 months | Near-zero | — |
 
 ## Architecture
