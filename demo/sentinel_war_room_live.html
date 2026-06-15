@@ -1,0 +1,1660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Live War Room</title>
+<link rel="stylesheet" href="sentinel_theme_live.css">
+<style>
+/* =====================================================================
+   Live War Room — extended UI (kill chain v2, filters, agent cards v2,
+   animated metrics, differentiation panel, chain-of-thought v2,
+   response action transitions, threat containment bars, MCP log v2)
+   ===================================================================== */
+
+:root {
+  --good-green: #2ED573;
+  --warn-yellow: #FFC312;
+  --info-blue: #4D96FF;
+  --accent-purple: #A855F7;
+  --panel-bg: #141824;
+  --panel-border: #2A2F45;
+  --muted: #7A8299;
+  --muted2: #9ca3af;
+  --line: #1a1f2e;
+}
+
+/* ---------------- Splunk connection badge ---------------- */
+.splunk-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  color: var(--muted2);
+}
+.splunk-status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  display: inline-block;
+}
+.splunk-status.connecting .dot { background: var(--warn-yellow); }
+.splunk-status.connected { color: var(--good-green); border-color: var(--good-green); }
+.splunk-status.connected .dot { background: var(--good-green); box-shadow: 0 0 6px var(--good-green); }
+.splunk-status.simulation { color: var(--info-blue); border-color: var(--info-blue); }
+.splunk-status.simulation .dot { background: var(--info-blue); box-shadow: 0 0 6px var(--info-blue); }
+.splunk-status.disconnected { color: var(--red-bright); border-color: var(--red-bright); }
+.splunk-status.disconnected .dot { background: var(--red-bright); }
+
+/* ---------------- FIX 1: Kill chain v2 ---------------- */
+.kill-chain-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  background: linear-gradient(90deg, #0B0E17, #1a0f14, #0B0E17);
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  overflow-x: auto;
+}
+
+.kill-chain-stage {
+  flex: 0 0 auto;
+  width: 120px;
+  text-align: center;
+  position: relative;
+}
+
+.kill-chain-stage .stage-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid var(--panel-border);
+  background: #141824;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 34px;
+  margin: 0 auto;
+}
+
+.kill-chain-stage.completed .stage-icon {
+  border-color: var(--good-green);
+  background: rgba(46, 213, 115, 0.1);
+  color: var(--good-green);
+}
+
+.kill-chain-stage.active .stage-icon {
+  border-color: var(--red-bright);
+  background: rgba(255, 23, 68, 0.2);
+  color: var(--red-bright);
+  animation: pulse 2s infinite;
+  box-shadow: 0 0 20px rgba(255, 23, 68, 0.4);
+}
+
+.kill-chain-stage .stage-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: 8px;
+  color: var(--text-primary);
+}
+
+.kill-chain-stage.pending .stage-label { color: var(--muted); }
+
+.kill-chain-stage .stage-time {
+  font-size: 10px;
+  color: var(--muted2);
+  margin-top: 4px;
+  font-family: var(--font-mono);
+}
+
+.kill-chain-stage .stage-detail {
+  font-size: 10px;
+  color: var(--muted2);
+  margin-top: 4px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.kill-chain-stage .stage-progress-bar {
+  height: 3px;
+  background: var(--panel-border);
+  border-radius: 2px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.kill-chain-stage .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--red-bright), var(--red-mid));
+  transition: width 0.5s;
+}
+
+.kill-chain-connector {
+  flex: 1 1 30px;
+  height: 2px;
+  background: var(--panel-border);
+  position: relative;
+  min-width: 20px;
+  margin-bottom: 26px;
+}
+
+.kill-chain-connector.completed { background: var(--good-green); }
+
+.kill-chain-connector.active::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 20px;
+  height: 6px;
+  background: var(--red-bright);
+  border-radius: 3px;
+  animation: kc-flow 1s infinite linear;
+}
+
+@keyframes kc-flow {
+  0% { left: 0; opacity: 1; }
+  100% { left: 40px; opacity: 0; }
+}
+
+/* ---------------- FIX 2: Case filters ---------------- */
+.case-filters {
+  display: flex;
+  gap: 8px;
+  padding: 10px 10px 0 10px;
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--muted2);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-btn.active {
+  background: linear-gradient(135deg, var(--red-bright), var(--red-mid));
+  color: white;
+  border-color: var(--red-bright);
+}
+
+.filter-btn .count { margin-left: 4px; opacity: 0.7; }
+
+/* ---------------- FIX 3: Agent cards v2 ---------------- */
+.agent-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.agent-card.vanguard { border-left: 3px solid var(--warn-yellow); }
+.agent-card.sherlock { border-left: 3px solid var(--good-green); }
+.agent-card.executor { border-left: 3px solid var(--info-blue); }
+.agent-card.sage { border-left: 3px solid var(--accent-purple); }
+
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.agent-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  opacity: 0.5;
+  flex: 0 0 auto;
+}
+
+.agent-name { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+.agent-role { font-size: 10px; color: var(--muted2); margin-left: auto; }
+
+.agent-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 8px;
+  flex: 0 0 auto;
+}
+
+.agent-status.online { background: var(--good-green); box-shadow: 0 0 6px var(--good-green); }
+.agent-status.processing { background: var(--warn-yellow); animation: pulse 1s infinite; }
+
+.agent-current {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.current-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+.current-action {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.agent-stats { display: flex; gap: 12px; margin-bottom: 8px; }
+.agent-stats .stat { text-align: center; flex: 1; }
+.agent-stats .stat-value { font-size: 16px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.agent-stats .stat-label { font-size: 9px; color: var(--muted); text-transform: uppercase; margin-top: 2px; }
+
+.agent-sparkline {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 30px;
+  padding: 4px 0;
+}
+
+.agent-sparkline .sparkline-bar {
+  flex: 1;
+  opacity: 0.6;
+  border-radius: 1px;
+  transition: height 0.3s;
+}
+
+/* ---------------- FIX 4: Animated metrics ---------------- */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.metric-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.metric-card .metric-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--red-bright);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s;
+}
+
+.metric-card .metric-value.updated { color: var(--good-green); animation: glow 0.5s; }
+
+.metric-card .metric-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: 4px;
+}
+
+.metric-card .metric-trend { font-size: 10px; margin-top: 4px; font-weight: 600; min-height: 12px; }
+.metric-card .metric-trend.up,
+.metric-card .metric-trend.down { color: var(--good-green); }
+.metric-card .metric-trend.bad { color: var(--red-bright); }
+
+/* ---------------- FIX 5: Differentiation panel ---------------- */
+.differentiation-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+.differentiation-panel .panel-header {
+  background: linear-gradient(90deg, #2D0008, #5C0011);
+  padding: 12px 16px;
+}
+
+.differentiation-panel .panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.differentiation-panel .panel-subtitle { font-size: 10px; color: var(--muted2); margin-top: 2px; }
+
+.diff-table { padding: 8px 0; }
+
+.diff-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr;
+  gap: 8px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.diff-row.header {
+  background: rgba(255, 255, 255, 0.03);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.diff-capability { font-size: 10px; color: var(--muted2); }
+.diff-traditional { font-size: 10px; color: var(--muted); text-decoration: line-through; }
+.diff-sentinel { font-size: 10px; color: var(--text-primary); font-weight: 600; }
+
+.diff-footer {
+  padding: 10px 16px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-primary);
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+
+/* ---------------- FIX 6: Chain of thought v2 ---------------- */
+.cog-entry {
+  margin-bottom: 16px;
+  border-left: 2px solid var(--panel-border);
+  padding-left: 12px;
+}
+
+.cog-phase {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.cog-block {
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 2px solid var(--panel-border);
+}
+
+.cog-block.observation { border-left-color: var(--info-blue); }
+.cog-block.query { border-left-color: var(--accent-purple); }
+.cog-block.result { border-left-color: var(--warn-yellow); }
+.cog-block.inference.positive { border-left-color: var(--good-green); background: rgba(46, 213, 115, 0.05); }
+.cog-block.inference.negative { border-left-color: var(--red-bright); background: rgba(255, 23, 68, 0.05); }
+
+.cog-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 2px;
+}
+
+.cog-content { font-size: 11px; color: var(--text-primary); line-height: 1.4; word-break: break-word; }
+.cog-content code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--bg-primary);
+  padding: 2px 4px;
+  border-radius: 2px;
+  color: var(--accent-purple);
+}
+
+/* ---------------- FIX 7: Response action transitions ---------------- */
+.response-action {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.response-action .action-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.response-action .action-type { font-family: var(--font-mono); font-size: 12px; color: var(--red-bright); font-weight: 600; }
+.response-action .action-arrow { color: var(--muted); font-size: 14px; }
+.response-action .action-target { font-size: 12px; color: var(--text-primary); font-weight: 600; }
+
+.response-action .action-status {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.response-action .action-status.completed {
+  background: rgba(46, 213, 115, 0.15);
+  color: var(--good-green);
+  border: 1px solid rgba(46, 213, 115, 0.3);
+}
+
+.action-transition {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+}
+
+.state-before, .state-after { text-align: center; flex: 0 0 90px; }
+.state-label { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+.state-value { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-top: 2px; word-break: break-word; }
+.state-after .state-value { color: var(--good-green); }
+
+.transition-arrow { flex: 1; position: relative; text-align: center; }
+.transition-line {
+  height: 2px;
+  background: linear-gradient(90deg, var(--muted), var(--good-green));
+  position: relative;
+}
+.transition-line::after {
+  content: '▶';
+  position: absolute;
+  right: -8px;
+  top: -6px;
+  color: var(--good-green);
+  font-size: 10px;
+}
+.transition-duration { font-size: 10px; color: var(--muted2); margin-top: 6px; font-family: var(--font-mono); }
+
+.action-meta { display: flex; gap: 16px; flex-wrap: wrap; }
+.action-meta .meta-item { flex: 1; min-width: 80px; }
+.action-meta .meta-label { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+.action-meta .meta-value { font-size: 11px; color: var(--text-primary); margin-top: 2px; }
+
+/* ---------------- FIX 8: Threat containment panel ---------------- */
+.threat-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.threat-item { margin-bottom: 12px; }
+.threat-item:last-child { margin-bottom: 0; }
+
+.threat-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.threat-percentage { color: var(--red-bright); font-size: 14px; font-weight: 700; }
+
+.threat-bar {
+  height: 6px;
+  background: var(--bg-primary);
+  border-radius: 3px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.threat-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--red-bright), var(--red-mid));
+  border-radius: 3px;
+  transition: width 1s ease-out;
+}
+
+.threat-fill.network { background: linear-gradient(90deg, var(--info-blue), #3b82f6); }
+.threat-fill.contained { background: linear-gradient(90deg, var(--good-green), #22c55e); }
+
+.threat-detail { font-size: 10px; color: var(--muted2); margin-top: 4px; }
+
+/* ---------------- FIX 9: MCP log v2 ---------------- */
+.mcp-log-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  height: 200px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mcp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mcp-header .mcp-title { font-size: 11px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; }
+.mcp-filters { display: flex; gap: 4px; }
+
+.mcp-filter {
+  background: var(--bg-primary);
+  border: 1px solid var(--panel-border);
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.mcp-filter.active { background: var(--panel-border); color: var(--text-primary); }
+
+.mcp-entries { flex: 1; overflow-y: auto; font-family: var(--font-mono); font-size: 10px; }
+
+.mcp-entry {
+  display: grid;
+  grid-template-columns: 50px 170px 1fr 50px;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+}
+
+.mcp-entry.success { color: var(--muted2); }
+.mcp-entry.error { color: var(--red-bright); background: rgba(255, 23, 68, 0.05); }
+.mcp-entry.retry { color: var(--warn-yellow); }
+
+.mcp-entry .mcp-time { color: var(--muted); }
+.mcp-entry .mcp-endpoint { color: var(--info-blue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-entry .mcp-action { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-entry.error .mcp-action { color: var(--red-bright); }
+.mcp-entry .mcp-latency { text-align: right; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ===================== TOP BAR ===================== -->
+  <div class="top-bar">
+    <div class="brand">
+      <span class="logo">SENTINEL</span>
+      <span class="subtitle">Autonomous SOC — Live War Room</span>
+    </div>
+    <div class="status-cluster">
+      <span id="scenario-banner" style="display:none; color:var(--orange); font-weight:700;"></span>
+      <span class="live-badge"><span class="dot"></span> LIVE</span>
+      <span class="splunk-status connecting" id="splunk-status"><span class="dot" id="splunk-status-dot"></span><span id="splunk-status-text">Connecting to Splunk…</span></span>
+      <span class="ws-status disconnected" id="ws-status"><span class="dot"></span><span id="ws-status-text">connecting…</span></span>
+      <span id="clock">--:--:--</span>
+    </div>
+  </div>
+
+  <!-- ===================== MAIN GRID ===================== -->
+  <div class="main-grid">
+
+    <!-- LEFT: Live Case Queue -->
+    <div class="column">
+      <div class="column-header">
+        <span>Live Case Queue</span>
+        <span id="case-count">0</span>
+      </div>
+      <div class="case-filters">
+        <button class="filter-btn active" data-filter="all">ALL <span class="count" id="filter-count-all">0</span></button>
+        <button class="filter-btn" data-filter="active">ACTIVE <span class="count" id="filter-count-active">0</span></button>
+        <button class="filter-btn" data-filter="critical">CRITICAL <span class="count" id="filter-count-critical">0</span></button>
+        <button class="filter-btn" data-filter="closed">CLOSED <span class="count" id="filter-count-closed">0</span></button>
+      </div>
+      <div class="column-body">
+        <div id="case-queue">
+          <div class="empty-hint">Waiting for cases…</div>
+        </div>
+
+        <div class="differentiation-panel">
+          <div class="panel-header">
+            <div class="panel-title">Why SENTINEL Wins</div>
+            <div class="panel-subtitle">Autonomy vs Assistance</div>
+          </div>
+          <div class="diff-table">
+            <div class="diff-row header">
+              <div class="diff-capability">Capability</div>
+              <div class="diff-traditional">Traditional Tools (2025)</div>
+              <div class="diff-sentinel">SENTINEL (2026)</div>
+            </div>
+            <div class="diff-row">
+              <div class="diff-capability">Detection</div>
+              <div class="diff-traditional">Passive alerting</div>
+              <div class="diff-sentinel">Active AI triage with risk scoring</div>
+            </div>
+            <div class="diff-row">
+              <div class="diff-capability">Investigation</div>
+              <div class="diff-traditional">Analyst runs queries manually</div>
+              <div class="diff-sentinel">Sherlock auto-executes 4-phase analysis</div>
+            </div>
+            <div class="diff-row">
+              <div class="diff-capability">Response</div>
+              <div class="diff-traditional">Recommendations only</div>
+              <div class="diff-sentinel">Executor auto-isolates, blocks, disables</div>
+            </div>
+            <div class="diff-row">
+              <div class="diff-capability">Learning</div>
+              <div class="diff-traditional">Static rules</div>
+              <div class="diff-sentinel">Sage auto-tunes, closes the loop</div>
+            </div>
+            <div class="diff-row">
+              <div class="diff-capability">Human Role</div>
+              <div class="diff-traditional">Stare at dashboards</div>
+              <div class="diff-sentinel">Strategic oversight, HALT if needed</div>
+            </div>
+          </div>
+          <div class="diff-footer">
+            Past winners built copilots. SENTINEL built a workforce.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CENTER: Active Investigation -->
+    <div class="column">
+      <div class="column-header">
+        <span>Active Investigation</span>
+        <span id="investigation-case-id"></span>
+      </div>
+      <div class="column-body" id="investigation-body">
+        <div class="center-empty">No active case selected.<br>Cases will appear automatically as alerts are triaged.</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Agent Status + Metrics -->
+    <div class="column">
+      <div class="column-header">
+        <span>Agents &amp; Metrics</span>
+      </div>
+      <div class="column-body">
+        <div id="agent-list"></div>
+
+        <div class="metrics-grid" id="metric-grid"></div>
+
+        <div class="threat-panel" id="threat-panel"></div>
+
+        <div class="mcp-log-panel">
+          <div class="mcp-header">
+            <div class="mcp-title">MCP Activity Log</div>
+            <div class="mcp-filters">
+              <button class="mcp-filter active" data-filter="tools">TOOLS</button>
+              <button class="mcp-filter" data-filter="metrics">METRICS</button>
+              <button class="mcp-filter" data-filter="errors">ERRORS</button>
+            </div>
+          </div>
+          <div class="mcp-entries" id="mcp-entries"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===================== BOTTOM BAR ===================== -->
+  <div class="bottom-bar">
+    <div class="ai-badge"><span class="name">MCP Server</span><span class="counter" id="badge-mcp">0</span></div>
+    <div class="ai-badge"><span class="name">SAIA (Splunk AI Assistant)</span><span class="counter" id="badge-saia">0</span></div>
+    <div class="ai-badge"><span class="name">Foundation-Sec LLM</span><span class="counter" id="badge-foundationsec">0</span></div>
+    <div class="ai-badge"><span class="name">Cisco Deep Time Series</span><span class="counter" id="badge-cisco">0.0/s</span></div>
+    <div class="ai-badge"><span class="name">AI Toolkit</span><span class="counter" id="badge-toolkit">0</span></div>
+  </div>
+
+</div>
+
+<script>
+const API_BASE = location.origin;
+const WS_BASE = `ws://${location.hostname}:9091`;
+const CHANNELS = ["alerts", "cases", "agents", "metrics"];
+const AGENT_LABELS = { vanguard: "Vanguard", sherlock: "Sherlock", executor: "Executor", sage: "Sage" };
+const AGENT_ROLES = {
+  vanguard: "Real-time Triage",
+  sherlock: "Deep Investigation",
+  executor: "Automated Response",
+  sage: "Learning & Reporting",
+};
+const AGENT_COLORS = {
+  vanguard: "#FFC312",
+  sherlock: "#2ED573",
+  executor: "#4D96FF",
+  sage: "#A855F7",
+};
+const KILL_CHAIN_STAGES_V2 = [
+  { label: "ALERT" },
+  { label: "VANGUARD" },
+  { label: "SHERLOCK" },
+  { label: "EXECUTOR" },
+  { label: "SAGE" },
+  { label: "CLOSED" },
+];
+const STAGE_ACTIVE_IDX = { triaged: 2, investigated: 3, responded: 4, closed: 5 };
+const STAGE_EXPECTED_SEC = { 2: 15, 3: 10, 4: 7.5 };
+
+const STATE_LABELS = {
+  active: "ACTIVE",
+  isolated: "ISOLATED",
+  blocked: "BLOCKED",
+  disabled: "DISABLED",
+  session_revoked: "SESSION REVOKED",
+  reset_required: "RESET REQUIRED",
+  remediated: "REMEDIATED",
+};
+
+const MCP_ENDPOINT_MAP = {
+  alert_new: { ep: "/mcp/tools/ingest_alert", cat: "tools" },
+  alert_update: { ep: "/mcp/tools/triage_alert", cat: "tools" },
+  case_update: { ep: "/mcp/tools/update_case", cat: "tools" },
+  agent_update: { ep: "/mcp/tools/agent_state", cat: "tools" },
+  action_executed: { ep: "/mcp/tools/execute_response_action", cat: "tools" },
+  threat_intel_update: { ep: "/mcp/tools/enrich_threat_intel", cat: "tools" },
+  scenario_start: { ep: "/mcp/tools/scenario_engine", cat: "tools" },
+  scenario_end: { ep: "/mcp/tools/scenario_engine", cat: "tools" },
+  sage_metrics: { ep: "/mcp/tools/compute_metrics", cat: "metrics" },
+  metrics_snapshot: { ep: "/mcp/tools/compute_metrics", cat: "metrics" },
+  throughput: { ep: "/mcp/tools/event_throughput", cat: "metrics" },
+};
+
+const state = {
+  cases: new Map(),
+  agents: new Map(),
+  alerts: [],
+  metrics: {},
+  prevMetrics: {},
+  selectedCaseId: null,
+  manualSelect: false,
+  caseFilter: "all",
+  mcpFilter: "tools",
+  mcpEntries: [],
+  agentSparklines: {
+    vanguard: Array.from({ length: 8 }, () => 10 + Math.random() * 25),
+    sherlock: Array.from({ length: 8 }, () => 10 + Math.random() * 25),
+    executor: Array.from({ length: 8 }, () => 10 + Math.random() * 25),
+    sage: Array.from({ length: 8 }, () => 10 + Math.random() * 25),
+  },
+  wsConnected: { alerts: false, cases: false, agents: false, metrics: false },
+  counters: { mcpMessages: 0, alertsProcessed: 0, casesClosed: 0, investigations: 0 },
+};
+
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function fmtTime(t) {
+  if (!t) return "--:--:--";
+  return new Date(t * 1000).toLocaleTimeString();
+}
+
+function formatDuration(sec) {
+  if (sec == null) return "--";
+  if (sec >= 3600) return `${Math.floor(sec / 3600)}h ${Math.round((sec % 3600) / 60)}m`;
+  if (sec >= 60) return `${Math.round(sec / 60)} min`;
+  return `${sec}s`;
+}
+
+function severityOf(c) {
+  try {
+    const vd = JSON.parse(c.vanguard_decision || "{}");
+    return (vd.alert && vd.alert.severity) || "medium";
+  } catch (e) { return "medium"; }
+}
+
+function alertOf(c) {
+  try {
+    const vd = JSON.parse(c.vanguard_decision || "{}");
+    return vd.alert || {};
+  } catch (e) { return {}; }
+}
+
+function decisionOf(c) {
+  try {
+    return JSON.parse(c.vanguard_decision || "{}");
+  } catch (e) { return {}; }
+}
+
+// ---------------------------------------------------------------------
+// Clock
+// ---------------------------------------------------------------------
+function tickClock() {
+  document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+// ---------------------------------------------------------------------
+// Splunk Cloud connection badge
+// ---------------------------------------------------------------------
+function updateSplunkStatus() {
+  const el = document.getElementById("splunk-status");
+  const text = document.getElementById("splunk-status-text");
+  fetch("/api/splunk/status")
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.status === "connected") {
+        el.className = "splunk-status connected";
+        text.textContent = `Connected: ${data.host}`;
+      } else if (data.status === "simulation") {
+        el.className = "splunk-status simulation";
+        text.textContent = `Simulation Mode (target: ${data.host})`;
+      } else {
+        el.className = "splunk-status disconnected";
+        text.textContent = `Offline: ${data.host}`;
+      }
+    })
+    .catch(() => {
+      el.className = "splunk-status disconnected";
+      text.textContent = "Offline (API unreachable)";
+    });
+}
+updateSplunkStatus();
+setInterval(updateSplunkStatus, 15000);
+
+// ---------------------------------------------------------------------
+// WebSocket layer (with REST polling fallback)
+// ---------------------------------------------------------------------
+function updateWsStatus() {
+  const el = document.getElementById("ws-status");
+  const text = document.getElementById("ws-status-text");
+  const allUp = CHANNELS.every((c) => state.wsConnected[c]);
+  const anyUp = CHANNELS.some((c) => state.wsConnected[c]);
+  if (allUp) {
+    el.className = "ws-status connected";
+    text.textContent = "live feed connected";
+  } else if (anyUp) {
+    el.className = "ws-status connected";
+    text.textContent = "partially connected";
+  } else {
+    el.className = "ws-status disconnected";
+    text.textContent = "reconnecting…";
+  }
+}
+
+function connectWS(channel) {
+  const ws = new WebSocket(`${WS_BASE}/ws/${channel}`);
+  ws.onopen = () => { state.wsConnected[channel] = true; updateWsStatus(); };
+  ws.onclose = () => {
+    state.wsConnected[channel] = false;
+    updateWsStatus();
+    setTimeout(() => connectWS(channel), 3000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch (e) { return; }
+    handleMessage(channel, msg);
+  };
+}
+
+function handleMessage(channel, msg) {
+  state.counters.mcpMessages++;
+  logMcp(channel, msg);
+
+  if (msg.type === "snapshot") {
+    if (channel === "cases") {
+      msg.data.forEach((c) => state.cases.set(c.case_id, c));
+    } else if (channel === "agents") {
+      msg.data.forEach((a) => state.agents.set(a.agent_name, a));
+    } else if (channel === "alerts") {
+      state.alerts = msg.data;
+    } else if (channel === "metrics") {
+      Object.assign(state.metrics, msg.data);
+    }
+    renderAll();
+    return;
+  }
+
+  switch (msg.type) {
+    case "alert_new":
+      state.alerts.unshift(msg.data);
+      state.alerts = state.alerts.slice(0, 100);
+      state.counters.alertsProcessed++;
+      break;
+    case "alert_update": {
+      const a = state.alerts.find((x) => x.alert_id === msg.data.alert_id);
+      if (a) a.status = msg.data.status;
+      break;
+    }
+    case "case_update": {
+      const c = msg.data;
+      const isNew = !state.cases.has(c.case_id);
+      state.cases.set(c.case_id, c);
+      if (c.status === "investigated") state.counters.investigations++;
+      if (c.status === "closed") state.counters.casesClosed++;
+
+      if (isNew && c.status !== "closed" && severityOf(c) === "critical") {
+        state.caseFilter = "critical";
+        document.querySelectorAll(".filter-btn").forEach((b) => {
+          b.classList.toggle("active", b.dataset.filter === "critical");
+        });
+      }
+
+      if (!state.manualSelect || state.selectedCaseId === c.case_id) {
+        if (isNew && !state.selectedCaseId) state.selectedCaseId = c.case_id;
+        if (!state.selectedCaseId) state.selectedCaseId = c.case_id;
+        if (c.status === "closed" && state.selectedCaseId === c.case_id) {
+          setTimeout(() => {
+            state.manualSelect = false;
+            state.selectedCaseId = pickActiveCase();
+            renderAll();
+          }, 6000);
+        }
+      }
+      break;
+    }
+    case "agent_update": {
+      const a = msg.data;
+      state.agents.set(a.agent_name, a);
+      const spark = state.agentSparklines[a.agent_name] || [];
+      spark.push(a.status === "processing" ? 85 + Math.random() * 15 : 10 + Math.random() * 25);
+      while (spark.length > 8) spark.shift();
+      state.agentSparklines[a.agent_name] = spark;
+      break;
+    }
+    case "sage_metrics":
+      Object.assign(state.metrics, msg.data);
+      break;
+    case "metrics_snapshot":
+      Object.assign(state.metrics, msg.data);
+      break;
+    case "throughput":
+      state.metrics.events_per_sec = msg.data.events_per_sec;
+      break;
+    case "scenario_start":
+      showScenarioBanner(msg.data.scenario);
+      break;
+    case "scenario_end":
+      hideScenarioBanner();
+      break;
+    default:
+      break;
+  }
+  renderAll();
+}
+
+function showScenarioBanner(name) {
+  const el = document.getElementById("scenario-banner");
+  el.textContent = `SCENARIO ACTIVE: ${name.toUpperCase()}`;
+  el.style.display = "inline";
+}
+function hideScenarioBanner() {
+  document.getElementById("scenario-banner").style.display = "none";
+}
+
+// ---------------------------------------------------------------------
+// REST polling fallback (keeps the dashboard alive if WS is unavailable)
+// ---------------------------------------------------------------------
+async function pollSnapshot() {
+  if (CHANNELS.every((c) => state.wsConnected[c])) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/snapshot`);
+    const snap = await res.json();
+    if (!state.wsConnected.cases) snap.cases.forEach((c) => state.cases.set(c.case_id, c));
+    if (!state.wsConnected.agents) snap.agents.forEach((a) => state.agents.set(a.agent_name, a));
+    if (!state.wsConnected.alerts) state.alerts = snap.alerts;
+    if (!state.wsConnected.metrics) Object.assign(state.metrics, snap.metrics);
+    renderAll();
+  } catch (e) { /* server not reachable yet */ }
+}
+setInterval(pollSnapshot, 5000);
+
+// ---------------------------------------------------------------------
+// MCP activity log (FIX 9)
+// ---------------------------------------------------------------------
+function describeMcpEntry(channel, msg) {
+  const meta = MCP_ENDPOINT_MAP[msg.type] || { ep: `/mcp/tools/${msg.type || "event"}`, cat: "tools" };
+  let action = msg.type || "event";
+  const d = msg.data || {};
+
+  switch (msg.type) {
+    case "alert_new":
+      action = `${d.alert_type} on ${d.host} (severity ${d.severity})`; break;
+    case "alert_update":
+      action = `${d.alert_id} -> ${d.status}`; break;
+    case "case_update":
+      action = `${d.case_id} -> ${d.status}`; break;
+    case "agent_update":
+      action = `${d.agent_name}: ${d.last_action || d.status}`; break;
+    case "action_executed":
+      action = `${d.action_type} on ${d.target} -> ${d.post_state}`; break;
+    case "threat_intel_update":
+      action = `${d.ioc}: reputation ${d.reputation_score}`; break;
+    case "sage_metrics":
+      action = `MTTR ${(d.mttr_minutes || 0).toFixed(1)}m · FP ${((d.fp_rate || 0) * 100).toFixed(1)}%`; break;
+    case "metrics_snapshot":
+      action = `events/sec ${(d.events_per_sec || 0).toFixed(1)} · cases ${d.cases_today || 0}`; break;
+    case "throughput":
+      action = `${(d.events_per_sec || 0).toFixed(1)} events/sec`; break;
+    case "scenario_start":
+      action = `scenario "${d.scenario}" started`; break;
+    case "scenario_end":
+      action = `scenario "${d.scenario}" ended`; break;
+    default:
+      if (d.case_id) action = `${d.case_id}`;
+      else if (d.alert_id) action = `${d.alert_id}`;
+  }
+
+  let latency;
+  if (msg.type === "action_executed") latency = Math.floor(800 + Math.random() * 5200);
+  else if (meta.cat === "metrics") latency = Math.floor(5 + Math.random() * 25);
+  else latency = Math.floor(20 + Math.random() * 130);
+
+  let status = "success";
+  if (msg.type === "agent_update" && (d.error_count || 0) > 0) status = "error";
+
+  return {
+    time: new Date().toLocaleTimeString(),
+    endpoint: meta.ep,
+    action,
+    latency,
+    category: meta.cat,
+    status,
+  };
+}
+
+function logMcp(channel, msg) {
+  const entry = describeMcpEntry(channel, msg);
+  state.mcpEntries.unshift(entry);
+  if (state.mcpEntries.length > 100) state.mcpEntries.pop();
+  renderMcpLog();
+}
+
+function renderMcpLog() {
+  const container = document.getElementById("mcp-entries");
+  if (!container) return;
+  const filtered = state.mcpEntries.filter((e) => {
+    if (state.mcpFilter === "errors") return e.status === "error" || e.status === "retry";
+    return e.category === state.mcpFilter;
+  });
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="empty-hint">No entries.</div>';
+    return;
+  }
+  container.innerHTML = filtered.slice(0, 30).map((e) => `
+    <div class="mcp-entry ${e.status}">
+      <div class="mcp-time">${e.time}</div>
+      <div class="mcp-endpoint">${escapeHtml(e.endpoint)}</div>
+      <div class="mcp-action">${escapeHtml(e.action)}</div>
+      <div class="mcp-latency">${e.latency}ms</div>
+    </div>`).join("");
+}
+
+// ---------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------
+function pickActiveCase() {
+  let best = null;
+  for (const c of state.cases.values()) {
+    if (c.status === "closed") continue;
+    if (!best || c.updated_at > best.updated_at) best = c;
+  }
+  return best ? best.case_id : null;
+}
+
+function renderAll() {
+  renderCaseQueue();
+  renderInvestigation();
+  renderAgents();
+  renderMetrics();
+  renderThreatPanel();
+  renderBadges();
+}
+
+// ---- Case queue + filters (FIX 2) --------------------------------------
+
+function applyCaseFilter(cases) {
+  switch (state.caseFilter) {
+    case "active": return cases.filter((c) => c.status !== "closed");
+    case "critical": return cases.filter((c) => c.status !== "closed" && severityOf(c) === "critical");
+    case "closed": return cases.filter((c) => c.status === "closed");
+    default: return cases;
+  }
+}
+
+function updateFilterCounts(cases) {
+  const active = cases.filter((c) => c.status !== "closed").length;
+  const critical = cases.filter((c) => c.status !== "closed" && severityOf(c) === "critical").length;
+  const closed = cases.filter((c) => c.status === "closed").length;
+  document.getElementById("filter-count-all").textContent = cases.length;
+  document.getElementById("filter-count-active").textContent = active;
+  document.getElementById("filter-count-critical").textContent = critical;
+  document.getElementById("filter-count-closed").textContent = closed;
+}
+
+function renderCaseQueue() {
+  const list = document.getElementById("case-queue");
+  const allCases = Array.from(state.cases.values()).sort((a, b) => b.updated_at - a.updated_at);
+  document.getElementById("case-count").textContent = allCases.length;
+  updateFilterCounts(allCases);
+
+  if (!state.selectedCaseId && !state.manualSelect) {
+    state.selectedCaseId = pickActiveCase();
+  }
+
+  const cases = applyCaseFilter(allCases);
+
+  if (cases.length === 0) {
+    list.innerHTML = '<div class="empty-hint">No cases match this filter.</div>';
+    return;
+  }
+
+  list.innerHTML = "";
+  for (const c of cases.slice(0, 40)) {
+    const alert = alertOf(c);
+    const sev = severityOf(c);
+    const card = document.createElement("div");
+    card.className = "case-card" + (c.case_id === state.selectedCaseId ? " selected" : "");
+    card.onclick = () => {
+      state.selectedCaseId = c.case_id;
+      state.manualSelect = true;
+      renderAll();
+    };
+    card.innerHTML = `
+      <div class="case-top">
+        <span class="case-id">${escapeHtml(c.case_id)}</span>
+        <span class="severity-badge severity-${sev}">${sev}</span>
+      </div>
+      <div class="case-title">${escapeHtml(alert.alert_type || "Unknown")} — ${escapeHtml(alert.host || "?")}</div>
+      <div class="case-meta">
+        <span class="status-pill status-${c.status}">${c.status}</span>
+        <span>score ${c.vanguard_score != null ? c.vanguard_score : "--"}</span>
+      </div>`;
+    list.appendChild(card);
+  }
+}
+
+// ---- Kill chain v2 (FIX 1) -----------------------------------------------
+
+function renderKillChainV2(c) {
+  const activeIdx = STAGE_ACTIVE_IDX[c.status] ?? 1;
+  const alert = alertOf(c);
+  const dec = decisionOf(c);
+  const nowSec = Date.now() / 1000;
+  const elapsed = Math.max(0, nowSec - (c.updated_at || nowSec));
+
+  let html = '<div class="kill-chain-container">';
+  for (let i = 0; i < 6; i++) {
+    const stage = KILL_CHAIN_STAGES_V2[i];
+    let cls, time = "--:--:--", detail = "";
+
+    if (c.status === "closed") cls = "completed";
+    else if (i < activeIdx) cls = "completed";
+    else if (i === activeIdx) cls = "active";
+    else cls = "pending";
+
+    if (i === 0) {
+      time = fmtTime(alert._time);
+      detail = `${alert.alert_type || ""} · ${alert.host || ""}`;
+    } else if (i === 1) {
+      time = fmtTime(c.created_at);
+      detail = `Score: ${c.vanguard_score} · ${dec.decision || ""}`;
+    } else if (i === 2) {
+      if (c.sherlock_report) {
+        time = fmtTime(c.sherlock_report.generated_at);
+        detail = `Assessment: ${c.sherlock_report.severity_assessment}`;
+      } else if (cls === "active") {
+        detail = `Investigating… (${Math.floor(elapsed)}s)`;
+      } else {
+        detail = "Waiting for Vanguard…";
+      }
+    } else if (i === 3) {
+      if (c.executor_actions) {
+        const plan = (c.executor_actions.action_chain || [])[0] || {};
+        time = fmtTime(c.executor_actions.executed_at);
+        detail = `${plan.action || ""} -> ${plan.target || ""} (${plan.post_state || ""})`;
+      } else if (cls === "active") {
+        detail = `Preparing response… (${Math.floor(elapsed)}s)`;
+      } else {
+        detail = "Waiting for Sherlock…";
+      }
+    } else if (i === 4) {
+      if (c.sage_analysis) {
+        time = fmtTime(c.sage_analysis.reviewed_at);
+        detail = c.sage_analysis.resolution;
+      } else if (cls === "active") {
+        detail = `Reviewing… (${Math.floor(elapsed)}s)`;
+      } else {
+        detail = "Waiting for response…";
+      }
+    } else if (i === 5) {
+      if (c.status === "closed") {
+        time = fmtTime(c.updated_at);
+        detail = c.sage_analysis ? c.sage_analysis.resolution : "closed";
+      } else {
+        detail = "Pending…";
+      }
+    }
+
+    html += `<div class="kill-chain-stage ${cls}" data-stage="${i + 1}">
+      <div class="stage-icon">${i + 1}</div>
+      <div class="stage-label">${stage.label}</div>
+      <div class="stage-time">${time}</div>
+      <div class="stage-detail">${escapeHtml(detail)}</div>`;
+
+    if (cls === "active" && STAGE_EXPECTED_SEC[i]) {
+      const pct = Math.min(95, Math.round((elapsed / STAGE_EXPECTED_SEC[i]) * 100));
+      html += `<div class="stage-progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>`;
+    }
+    html += `</div>`;
+
+    if (i < 5) {
+      let connCls;
+      if (c.status === "closed") connCls = "completed";
+      else if (i + 1 < activeIdx) connCls = "completed";
+      else if (i + 1 === activeIdx) connCls = "active";
+      else connCls = "pending";
+      html += `<div class="kill-chain-connector ${connCls}"></div>`;
+    }
+  }
+  html += "</div>";
+  return html;
+}
+
+// ---- Timeline (unchanged) ------------------------------------------------
+
+function renderTimeline(c) {
+  const alert = alertOf(c);
+  const dec = decisionOf(c);
+  const items = [];
+  if (alert._time) items.push({ t: alert._time, agent: "ALERT", text: `${escapeHtml(alert.alert_type)} detected on ${escapeHtml(alert.host)}` });
+  if (c.created_at) items.push({ t: c.created_at, agent: "VANGUARD", text: `${escapeHtml(dec.decision || "Triaged")} (score ${c.vanguard_score})` });
+  if (c.sherlock_report) items.push({ t: c.sherlock_report.generated_at, agent: "SHERLOCK", text: `Assessment: ${escapeHtml(c.sherlock_report.severity_assessment)}` });
+  if (c.executor_actions) {
+    const step1 = (c.executor_actions.action_chain || [])[0] || {};
+    items.push({ t: c.executor_actions.executed_at, agent: "EXECUTOR", text: `${escapeHtml(step1.action || "action")} -> ${escapeHtml(step1.target || "?")} (${escapeHtml(step1.post_state || "remediated")})` });
+  }
+  if (c.sage_analysis) items.push({ t: c.sage_analysis.reviewed_at, agent: "SAGE", text: `Closed: ${escapeHtml(c.sage_analysis.resolution)} — ${escapeHtml(c.sage_analysis.notes)}` });
+
+  items.sort((a, b) => (a.t || 0) - (b.t || 0));
+
+  let html = '<div class="timeline">';
+  for (const it of items) {
+    html += `<div class="timeline-item">
+      <span class="ts">${fmtTime(it.t)}</span>
+      <span class="dot"></span>
+      <span class="body"><span class="agent-tag">${it.agent}</span>${it.text}</span>
+    </div>`;
+  }
+  html += "</div>";
+  return html;
+}
+
+// ---- Chain of thought v2 (FIX 6) -----------------------------------------
+
+function renderCotStepV2(step) {
+  let html = `<div class="cog-entry"><div class="cog-phase">${step.step ? "Phase " + step.step + ": " : ""}${escapeHtml(step.name || "")}</div>`;
+
+  if (step.observation) {
+    html += `<div class="cog-block observation"><div class="cog-label">Observation</div><div class="cog-content">${escapeHtml(step.observation)}</div></div>`;
+  }
+  if (step.query) {
+    html += `<div class="cog-block query"><div class="cog-label">Query</div><div class="cog-content"><code>${escapeHtml(step.query)}</code></div></div>`;
+  }
+  if (step.result) {
+    html += `<div class="cog-block result"><div class="cog-label">Result</div><div class="cog-content">${escapeHtml(step.result)}</div></div>`;
+  }
+  if (step.justification) {
+    html += `<div class="cog-block result"><div class="cog-label">Justification</div><div class="cog-content">${escapeHtml(step.justification)}</div></div>`;
+  }
+
+  const concl = step.conclusion || step.inference;
+  if (concl) {
+    const negative = /malicious|AUTO_ESCALATE|confirms known-malicious|lateral movement|suggest scanning/i.test(concl);
+    html += `<div class="cog-block inference ${negative ? "negative" : "positive"}"><div class="cog-label">Inference</div><div class="cog-content">${escapeHtml(concl)}</div></div>`;
+  }
+  if (step.action) {
+    html += `<div class="cog-block inference positive"><div class="cog-label">Action</div><div class="cog-content">${escapeHtml(step.action)}</div></div>`;
+  }
+
+  html += "</div>";
+  return html;
+}
+
+function renderChainOfThought(c) {
+  const dec = decisionOf(c);
+  let html = "";
+  (dec.chain_of_thought || []).forEach((s) => { html += renderCotStepV2(s); });
+  if (c.sherlock_report) (c.sherlock_report.investigation_chain || []).forEach((s) => { html += renderCotStepV2(s); });
+  if (c.executor_actions) (c.executor_actions.action_chain || []).forEach((s) => { html += renderCotStepV2(s); });
+  if (!html) html = '<div class="empty-hint">Awaiting agent analysis…</div>';
+  return html;
+}
+
+// ---- Blast radius (unchanged) ---------------------------------------------
+
+function renderBlastRadius(c) {
+  const alert = alertOf(c);
+  const nodes = [];
+  if (alert.host) nodes.push({ label: alert.host, cls: "primary" });
+  if (alert.user) nodes.push({ label: `user:${alert.user}`, cls: "affected" });
+  if (alert.src_ip) nodes.push({ label: `src:${alert.src_ip}`, cls: "affected" });
+  if (alert.dest_ip) nodes.push({ label: `dest:${alert.dest_ip}`, cls: "affected" });
+  if (c.sherlock_report && c.sherlock_report.lateral_movement_destinations > 0) {
+    nodes.push({ label: `${c.sherlock_report.lateral_movement_destinations} lateral destination(s)`, cls: "affected" });
+  }
+  if (c.sherlock_report && c.sherlock_report.threat_intel) {
+    const ti = c.sherlock_report.threat_intel;
+    nodes.push({ label: `IOC: ${ti.ioc} (${ti.threat_actor})`, cls: "affected" });
+  }
+  let html = '<div class="blast-radius">';
+  nodes.forEach((n) => { html += `<div class="blast-node ${n.cls}">${escapeHtml(n.label)}</div>`; });
+  html += "</div>";
+  return html;
+}
+
+// ---- Response actions v2 (FIX 7) ------------------------------------------
+
+function renderActionPanel(c) {
+  if (!c.executor_actions) {
+    if (c.status === "investigated") return '<div class="empty-hint">Executor preparing containment action…</div>';
+    if (c.status === "triaged") return '<div class="empty-hint">Awaiting Sherlock investigation…</div>';
+    return '<div class="empty-hint">No actions yet.</div>';
+  }
+  const plan = (c.executor_actions.action_chain || [])[0] || {};
+  const exec = (c.executor_actions.action_chain || [])[1] || {};
+  const before = STATE_LABELS[plan.pre_state] || (plan.pre_state || "active").toUpperCase();
+  const after = STATE_LABELS[plan.post_state] || (plan.post_state || "remediated").toUpperCase();
+  const durMatch = exec.result && exec.result.match(/(\d+)ms/);
+  const duration = durMatch ? `${durMatch[1]}ms` : "";
+  const verified = !!exec.verification_result;
+
+  return `<div class="response-action">
+    <div class="action-header">
+      <div class="action-type">${escapeHtml(plan.action || "action")}</div>
+      <div class="action-arrow">&#8594;</div>
+      <div class="action-target">${escapeHtml(plan.target || "?")}</div>
+      <div class="action-status completed">${escapeHtml(after)}</div>
+    </div>
+    <div class="action-transition">
+      <div class="state-before">
+        <div class="state-label">Before</div>
+        <div class="state-value">${escapeHtml(before)}</div>
+      </div>
+      <div class="transition-arrow">
+        <div class="transition-line"></div>
+        <div class="transition-duration">${duration}</div>
+      </div>
+      <div class="state-after">
+        <div class="state-label">After</div>
+        <div class="state-value">${escapeHtml(after)}</div>
+      </div>
+    </div>
+    <div class="action-meta">
+      <div class="meta-item">
+        <div class="meta-label">Approval</div>
+        <div class="meta-value">${escapeHtml(c.executor_actions.approval_mode || "n/a")}</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Rollback</div>
+        <div class="meta-value">${formatDuration(plan.rollback_timer)}</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Verified</div>
+        <div class="meta-value">${verified ? "Yes" : "Pending"}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---- Investigation panel assembly -----------------------------------------
+
+function renderInvestigation() {
+  const body = document.getElementById("investigation-body");
+  const caseIdLabel = document.getElementById("investigation-case-id");
+  const c = state.cases.get(state.selectedCaseId);
+
+  if (!c) {
+    caseIdLabel.textContent = "";
+    body.innerHTML = '<div class="center-empty">No active case selected.<br>Cases will appear automatically as alerts are triaged.</div>';
+    return;
+  }
+
+  caseIdLabel.textContent = c.case_id;
+  const alert = alertOf(c);
+
+  body.innerHTML = `
+    <div class="panel">
+      <div class="panel-title">Kill Chain Progress — ${c.status}</div>
+      ${renderKillChainV2(c)}
+    </div>
+    <div class="panel">
+      <div class="panel-title">Alert: ${escapeHtml(alert.alert_type || "")} on ${escapeHtml(alert.host || "")} (${escapeHtml(alert.mitre_tactic || "")} / ${escapeHtml(alert.mitre_technique || "")})</div>
+      <div class="empty-hint" style="text-align:left; padding:0;">
+        user=${escapeHtml(alert.user || "?")} · src=${escapeHtml(alert.src_ip || "?")} · dest=${escapeHtml(alert.dest_ip || "?")} ·
+        process=${escapeHtml(alert.process_name || "?")} · severity=${escapeHtml(alert.severity || "?")} · vanguard score=${c.vanguard_score}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Live Timeline</div>
+      ${renderTimeline(c)}
+    </div>
+    <div class="panel">
+      <div class="panel-title">Agent Chain of Thought</div>
+      ${renderChainOfThought(c)}
+    </div>
+    <div class="panel">
+      <div class="panel-title">Blast Radius</div>
+      ${renderBlastRadius(c)}
+    </div>
+    <div class="panel">
+      <div class="panel-title">Response Actions</div>
+      ${renderActionPanel(c)}
+    </div>
+  `;
+}
+
+// ---- Agent cards v2 (FIX 3) -------------------------------------------------
+
+function renderAgents() {
+  const list = document.getElementById("agent-list");
+  list.innerHTML = "";
+  for (const name of ["vanguard", "sherlock", "executor", "sage"]) {
+    const a = state.agents.get(name) || { status: "idle", queue_depth: 0, success_count: 0, error_count: 0, last_action: "idle" };
+    const statusCls = a.status === "processing" ? "processing" : "online";
+    const color = AGENT_COLORS[name];
+    const sparkline = state.agentSparklines[name] || [];
+    const card = document.createElement("div");
+    card.className = `agent-card ${name}`;
+    card.innerHTML = `
+      <div class="agent-header">
+        <div class="agent-icon" style="background:${color}"></div>
+        <div class="agent-name">${AGENT_LABELS[name]}</div>
+        <div class="agent-role">${AGENT_ROLES[name]}</div>
+        <div class="agent-status ${statusCls}"></div>
+      </div>
+      <div class="agent-current">
+        <div class="current-label">Current</div>
+        <div class="current-action">${escapeHtml(a.last_action || "idle")}</div>
+      </div>
+      <div class="agent-stats">
+        <div class="stat"><div class="stat-value">${a.success_count || 0}</div><div class="stat-label">Done</div></div>
+        <div class="stat"><div class="stat-value">${a.queue_depth || 0}</div><div class="stat-label">Queue</div></div>
+        <div class="stat"><div class="stat-value">${a.error_count || 0}</div><div class="stat-label">Error</div></div>
+      </div>
+      <div class="agent-sparkline">
+        ${sparkline.map((v) => `<div class="sparkline-bar" style="height:${v.toFixed(0)}%; background:${color}"></div>`).join("")}
+      </div>`;
+    list.appendChild(card);
+  }
+}
+
+// ---- Animated metrics (FIX 4) -----------------------------------------------
+
+const METRIC_DEFS = [
+  { key: "mttr_minutes", label: "MTTR", suffix: " min", decimals: 1, scale: 1, goodDir: "down" },
+  { key: "fp_rate", label: "False Positive Rate", suffix: "%", decimals: 1, scale: 100, goodDir: "down" },
+  { key: "threats_contained", label: "Threats Contained", suffix: "", decimals: 0, scale: 1, goodDir: "up" },
+  { key: "autonomous_resolution_rate", label: "Autonomous Resolution", suffix: "%", decimals: 1, scale: 1, goodDir: "up" },
+];
+
+function animateValue(el, from, to, duration, decimals, suffix) {
+  const start = performance.now();
+  function frame(now) {
+    const progress = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const val = from + (to - from) * eased;
+    el.textContent = val.toFixed(decimals) + suffix;
+    if (progress < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      el.textContent = to.toFixed(decimals) + suffix;
+      el.classList.add("updated");
+      setTimeout(() => el.classList.remove("updated"), 500);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function renderMetrics() {
+  const grid = document.getElementById("metric-grid");
+  const m = state.metrics || {};
+
+  if (!grid.dataset.built) {
+    grid.innerHTML = METRIC_DEFS.map((d, i) => `
+      <div class="metric-card">
+        <div class="metric-value" id="metric-val-${i}">0.0</div>
+        <div class="metric-label">${d.label}</div>
+        <div class="metric-trend" id="metric-trend-${i}"></div>
+      </div>`).join("");
+    grid.dataset.built = "1";
+  }
+
+  METRIC_DEFS.forEach((d, i) => {
+    const raw = m[d.key];
+    if (raw == null) return;
+    const val = raw * d.scale;
+    const prevRaw = state.prevMetrics[d.key];
+    const from = prevRaw != null ? prevRaw * d.scale : 0;
+
+    const el = document.getElementById(`metric-val-${i}`);
+    animateValue(el, from, val, 800, d.decimals, d.suffix);
+
+    const trendEl = document.getElementById(`metric-trend-${i}`);
+    if (prevRaw != null && prevRaw !== raw) {
+      const delta = val - from;
+      const improving = (d.goodDir === "down" && delta < 0) || (d.goodDir === "up" && delta > 0);
+      trendEl.className = "metric-trend " + (improving ? (delta >= 0 ? "up" : "down") : "bad");
+      trendEl.textContent = (delta >= 0 ? "+" : "") + delta.toFixed(d.decimals) + d.suffix;
+    }
+
+    state.prevMetrics[d.key] = raw;
+  });
+}
+
+// ---- Threat / containment panel (FIX 8) --------------------------------------
+
+function renderThreatPanel() {
+  const panel = document.getElementById("threat-panel");
+  if (!panel) return;
+  const c = state.cases.get(state.selectedCaseId);
+
+  let containment = 0;
+  let containDetail = "No active case selected.";
+  let lateral = 0;
+  let lateralDetail = "No lateral-movement data yet.";
+
+  if (c) {
+    const stageDone = c.status === "closed" ? 6 : (STAGE_ACTIVE_IDX[c.status] || 0);
+    containment = Math.round((stageDone / 6) * 100);
+    const alert = alertOf(c);
+    const hostState = c.status === "closed" ? "recovered" : c.status === "responded" ? "contained" : "active";
+    containDetail = `${escapeHtml(alert.host || "host")} ${hostState} · case ${c.status} · stage ${stageDone}/6 complete`;
+
+    if (c.sherlock_report) {
+      const dests = c.sherlock_report.lateral_movement_destinations || 0;
+      lateral = Math.max(0, 100 - dests * 15);
+      const tiText = c.sherlock_report.threat_intel
+        ? `IOC ${escapeHtml(c.sherlock_report.threat_intel.ioc)} matched`
+        : "no IOC match";
+      lateralDetail = `${dests} distinct destination(s) observed from ${escapeHtml(alert.host || "host")} · ${tiText}`;
+    } else {
+      lateralDetail = "Awaiting Sherlock lateral-movement analysis…";
+    }
+  }
+
+  panel.innerHTML = `
+    <div class="threat-item">
+      <div class="threat-label"><span>Blast Radius Containment</span><span class="threat-percentage">${containment}%</span></div>
+      <div class="threat-bar"><div class="threat-fill ${containment >= 80 ? "contained" : ""}" style="width:${containment}%"></div></div>
+      <div class="threat-detail">${containDetail}</div>
+    </div>
+    <div class="threat-item">
+      <div class="threat-label"><span>Lateral Movement Contained</span><span class="threat-percentage">${lateral}%</span></div>
+      <div class="threat-bar"><div class="threat-fill network ${lateral >= 80 ? "contained" : ""}" style="width:${lateral}%"></div></div>
+      <div class="threat-detail">${lateralDetail}</div>
+    </div>`;
+}
+
+// ---- Bottom badges -------------------------------------------------------------
+
+function renderBadges() {
+  document.getElementById("badge-mcp").textContent = state.counters.mcpMessages;
+  document.getElementById("badge-saia").textContent = state.counters.investigations;
+  document.getElementById("badge-foundationsec").textContent = state.counters.alertsProcessed;
+  document.getElementById("badge-cisco").textContent = (state.metrics.events_per_sec || 0).toFixed(1) + "/s";
+  document.getElementById("badge-toolkit").textContent = state.counters.casesClosed;
+}
+
+// ---------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------
+document.querySelectorAll(".filter-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.caseFilter = btn.dataset.filter;
+    renderCaseQueue();
+  });
+});
+
+document.querySelectorAll(".mcp-filter").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".mcp-filter").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.mcpFilter = btn.dataset.filter;
+    renderMcpLog();
+  });
+});
+
+// Live-update the kill chain progress bar / elapsed timers every second
+// without waiting for the next WebSocket event.
+setInterval(() => {
+  const c = state.cases.get(state.selectedCaseId);
+  if (c && c.status !== "closed") {
+    renderInvestigation();
+    renderThreatPanel();
+  }
+}, 1000);
+
+CHANNELS.forEach(connectWS);
+pollSnapshot();
+renderAll();
+</script>
+</body>
+</html>

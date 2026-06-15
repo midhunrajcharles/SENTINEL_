@@ -36,3 +36,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# SENTINEL Live Data Stack — runtime database (regenerated on launch)
+sentinel_live.db
+sentinel_live.db-shm
+sentinel_live.db-wal

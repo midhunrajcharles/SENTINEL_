@@ -1,3 +1,5 @@
 requests>=2.31,<3.0
 urllib3>=2.0,<3.0
 splunk-sdk>=2.0,<3.0
+flask>=3.0,<4.0
+flask-cors>=4.0,<5.0

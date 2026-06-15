@@ -362,6 +362,32 @@ class SplunkMCPClient:
             },
         )
 
+    @classmethod
+    def from_config(cls, config: Any = None, agent_name: Optional[str] = None) -> "SplunkMCPClient":
+        """
+        Build a client from sentinel.conf [mcp], with env var overrides
+        (SENTINEL_MCP_URL / SENTINEL_MCP_TOKEN take precedence per-field).
+        """
+        from utils.config_loader import get_config
+        cfg = config or get_config()
+
+        base_url = os.environ.get(
+            cls._ENV_URL,
+            cfg.get("mcp", "server_url", default="https://localhost:3000"),
+        )
+        token = os.environ.get(
+            cls._ENV_TOKEN,
+            cfg.get("mcp", "auth_token", default=""),
+        )
+        verify_ssl = cfg.get_bool("general", "verify_ssl", default=False)
+
+        return cls(
+            base_url=base_url,
+            token=token,
+            agent_name=agent_name,
+            verify_ssl=verify_ssl,
+        )
+
     # ------------------------------------------------------------------
     # Internal transport
     # ------------------------------------------------------------------
